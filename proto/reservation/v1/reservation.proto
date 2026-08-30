@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package reservation.v1;
+
+option go_package = "github.com/seifsheikhelarab/taper/gen/go/reservation/v1;reservationv1";
+
+service ReservationService {
+  rpc Reserve(ReserveRequest) returns (ReserveResponse);
+  rpc Release(ReleaseRequest) returns (ReleaseResponse);
+}
+
+message ReservationItem {
+  string sku_id = 1;
+  string warehouse_id = 2;
+  int32 quantity = 3;
+}
+
+message ReserveRequest {
+  string tenant_id = 1;
+  string order_id = 2;
+  string idempotency_key = 3;
+  repeated ReservationItem items = 4;
+  int32 ttl_seconds = 5;
+}
+
+message ReserveResponse {
+  bool success = 1;
+  string reservation_id = 2;
+  repeated string failed_sku_ids = 3;
+  int64 expires_at_unix = 4;
+}
+
+message ReleaseRequest {
+  string tenant_id = 1;
+  string reservation_id = 2;
+  string order_id = 3;
+  string reason = 4;
+  string idempotency_key = 5;
+}
+
+message ReleaseResponse {
+  bool success = 1;
+  repeated string released_sku_ids = 2;
+}

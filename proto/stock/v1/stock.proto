@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package stock.v1;
+
+option go_package = "github.com/seifsheikhelarab/taper/gen/go/stock/v1;stockv1";
+
+service StockService {
+  rpc AdjustStock(AdjustStockRequest) returns (AdjustStockResponse);
+  rpc ConfirmStockAllocation(ConfirmStockAllocationRequest) returns (ConfirmStockAllocationResponse);
+  rpc UnlockStockForAudit(UnlockStockForAuditRequest) returns (UnlockStockForAuditResponse);
+}
+
+message AdjustStockRequest {
+  string tenant_id = 1;
+  string sku_id = 2;
+  string warehouse_id = 3;
+  int32 quantity_delta = 4;
+  string reason = 5;
+  string source = 6;
+  string idempotency_key = 7;
+}
+
+message AdjustStockResponse {
+  bool success = 1;
+  int32 available_qty = 2;
+  int32 reserved_qty = 3;
+  int32 allocated_qty = 4;
+  bool is_clamped_zero = 5;
+  string event_id = 6;
+}
+
+message ConfirmStockAllocationRequest {
+  string tenant_id = 1;
+  string order_id = 2;
+  string idempotency_key = 3;
+}
+
+message StockAllocationLine {
+  string sku_id = 1;
+  string warehouse_id = 2;
+  int32 allocated_qty = 3;
+}
+
+message ConfirmStockAllocationResponse {
+  bool success = 1;
+  repeated StockAllocationLine lines = 2;
+}
+
+message UnlockStockForAuditRequest {
+  string tenant_id = 1;
+  string sku_id = 2;
+  string warehouse_id = 3;
+  string reason = 4;
+  string actor_id = 5;
+}
+
+message UnlockStockForAuditResponse {
+  bool success = 1;
+  bool is_unlocked = 2;
+}
