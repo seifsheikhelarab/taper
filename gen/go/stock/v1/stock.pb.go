@@ -21,6 +21,66 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type StockLine struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SkuId         string                 `protobuf:"bytes,1,opt,name=sku_id,json=skuId,proto3" json:"sku_id,omitempty"`
+	WarehouseId   string                 `protobuf:"bytes,2,opt,name=warehouse_id,json=warehouseId,proto3" json:"warehouse_id,omitempty"`
+	Quantity      int32                  `protobuf:"varint,3,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StockLine) Reset() {
+	*x = StockLine{}
+	mi := &file_stock_v1_stock_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StockLine) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StockLine) ProtoMessage() {}
+
+func (x *StockLine) ProtoReflect() protoreflect.Message {
+	mi := &file_stock_v1_stock_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StockLine.ProtoReflect.Descriptor instead.
+func (*StockLine) Descriptor() ([]byte, []int) {
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *StockLine) GetSkuId() string {
+	if x != nil {
+		return x.SkuId
+	}
+	return ""
+}
+
+func (x *StockLine) GetWarehouseId() string {
+	if x != nil {
+		return x.WarehouseId
+	}
+	return ""
+}
+
+func (x *StockLine) GetQuantity() int32 {
+	if x != nil {
+		return x.Quantity
+	}
+	return 0
+}
+
 type AdjustStockRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	TenantId       string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -36,7 +96,7 @@ type AdjustStockRequest struct {
 
 func (x *AdjustStockRequest) Reset() {
 	*x = AdjustStockRequest{}
-	mi := &file_stock_v1_stock_proto_msgTypes[0]
+	mi := &file_stock_v1_stock_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -48,7 +108,7 @@ func (x *AdjustStockRequest) String() string {
 func (*AdjustStockRequest) ProtoMessage() {}
 
 func (x *AdjustStockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_v1_stock_proto_msgTypes[0]
+	mi := &file_stock_v1_stock_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -61,7 +121,7 @@ func (x *AdjustStockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdjustStockRequest.ProtoReflect.Descriptor instead.
 func (*AdjustStockRequest) Descriptor() ([]byte, []int) {
-	return file_stock_v1_stock_proto_rawDescGZIP(), []int{0}
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *AdjustStockRequest) GetTenantId() string {
@@ -127,7 +187,7 @@ type AdjustStockResponse struct {
 
 func (x *AdjustStockResponse) Reset() {
 	*x = AdjustStockResponse{}
-	mi := &file_stock_v1_stock_proto_msgTypes[1]
+	mi := &file_stock_v1_stock_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -139,7 +199,7 @@ func (x *AdjustStockResponse) String() string {
 func (*AdjustStockResponse) ProtoMessage() {}
 
 func (x *AdjustStockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_v1_stock_proto_msgTypes[1]
+	mi := &file_stock_v1_stock_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -152,7 +212,7 @@ func (x *AdjustStockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdjustStockResponse.ProtoReflect.Descriptor instead.
 func (*AdjustStockResponse) Descriptor() ([]byte, []int) {
-	return file_stock_v1_stock_proto_rawDescGZIP(), []int{1}
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AdjustStockResponse) GetSuccess() bool {
@@ -202,13 +262,14 @@ type ConfirmStockAllocationRequest struct {
 	TenantId       string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	OrderId        string                 `protobuf:"bytes,2,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
 	IdempotencyKey string                 `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	Lines          []*StockLine           `protobuf:"bytes,4,rep,name=lines,proto3" json:"lines,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ConfirmStockAllocationRequest) Reset() {
 	*x = ConfirmStockAllocationRequest{}
-	mi := &file_stock_v1_stock_proto_msgTypes[2]
+	mi := &file_stock_v1_stock_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -220,7 +281,7 @@ func (x *ConfirmStockAllocationRequest) String() string {
 func (*ConfirmStockAllocationRequest) ProtoMessage() {}
 
 func (x *ConfirmStockAllocationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_v1_stock_proto_msgTypes[2]
+	mi := &file_stock_v1_stock_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -233,7 +294,7 @@ func (x *ConfirmStockAllocationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfirmStockAllocationRequest.ProtoReflect.Descriptor instead.
 func (*ConfirmStockAllocationRequest) Descriptor() ([]byte, []int) {
-	return file_stock_v1_stock_proto_rawDescGZIP(), []int{2}
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ConfirmStockAllocationRequest) GetTenantId() string {
@@ -257,6 +318,13 @@ func (x *ConfirmStockAllocationRequest) GetIdempotencyKey() string {
 	return ""
 }
 
+func (x *ConfirmStockAllocationRequest) GetLines() []*StockLine {
+	if x != nil {
+		return x.Lines
+	}
+	return nil
+}
+
 type StockAllocationLine struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SkuId         string                 `protobuf:"bytes,1,opt,name=sku_id,json=skuId,proto3" json:"sku_id,omitempty"`
@@ -268,7 +336,7 @@ type StockAllocationLine struct {
 
 func (x *StockAllocationLine) Reset() {
 	*x = StockAllocationLine{}
-	mi := &file_stock_v1_stock_proto_msgTypes[3]
+	mi := &file_stock_v1_stock_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -280,7 +348,7 @@ func (x *StockAllocationLine) String() string {
 func (*StockAllocationLine) ProtoMessage() {}
 
 func (x *StockAllocationLine) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_v1_stock_proto_msgTypes[3]
+	mi := &file_stock_v1_stock_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -293,7 +361,7 @@ func (x *StockAllocationLine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StockAllocationLine.ProtoReflect.Descriptor instead.
 func (*StockAllocationLine) Descriptor() ([]byte, []int) {
-	return file_stock_v1_stock_proto_rawDescGZIP(), []int{3}
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *StockAllocationLine) GetSkuId() string {
@@ -327,7 +395,7 @@ type ConfirmStockAllocationResponse struct {
 
 func (x *ConfirmStockAllocationResponse) Reset() {
 	*x = ConfirmStockAllocationResponse{}
-	mi := &file_stock_v1_stock_proto_msgTypes[4]
+	mi := &file_stock_v1_stock_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -339,7 +407,7 @@ func (x *ConfirmStockAllocationResponse) String() string {
 func (*ConfirmStockAllocationResponse) ProtoMessage() {}
 
 func (x *ConfirmStockAllocationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_v1_stock_proto_msgTypes[4]
+	mi := &file_stock_v1_stock_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -352,7 +420,7 @@ func (x *ConfirmStockAllocationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfirmStockAllocationResponse.ProtoReflect.Descriptor instead.
 func (*ConfirmStockAllocationResponse) Descriptor() ([]byte, []int) {
-	return file_stock_v1_stock_proto_rawDescGZIP(), []int{4}
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ConfirmStockAllocationResponse) GetSuccess() bool {
@@ -365,6 +433,254 @@ func (x *ConfirmStockAllocationResponse) GetSuccess() bool {
 func (x *ConfirmStockAllocationResponse) GetLines() []*StockAllocationLine {
 	if x != nil {
 		return x.Lines
+	}
+	return nil
+}
+
+type ReserveStockRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TenantId       string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	OrderId        string                 `protobuf:"bytes,2,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	IdempotencyKey string                 `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	Lines          []*StockLine           `protobuf:"bytes,4,rep,name=lines,proto3" json:"lines,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ReserveStockRequest) Reset() {
+	*x = ReserveStockRequest{}
+	mi := &file_stock_v1_stock_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReserveStockRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReserveStockRequest) ProtoMessage() {}
+
+func (x *ReserveStockRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stock_v1_stock_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReserveStockRequest.ProtoReflect.Descriptor instead.
+func (*ReserveStockRequest) Descriptor() ([]byte, []int) {
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ReserveStockRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *ReserveStockRequest) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+func (x *ReserveStockRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
+}
+
+func (x *ReserveStockRequest) GetLines() []*StockLine {
+	if x != nil {
+		return x.Lines
+	}
+	return nil
+}
+
+type ReserveStockResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	FailedSkuIds  []string               `protobuf:"bytes,2,rep,name=failed_sku_ids,json=failedSkuIds,proto3" json:"failed_sku_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReserveStockResponse) Reset() {
+	*x = ReserveStockResponse{}
+	mi := &file_stock_v1_stock_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReserveStockResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReserveStockResponse) ProtoMessage() {}
+
+func (x *ReserveStockResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_stock_v1_stock_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReserveStockResponse.ProtoReflect.Descriptor instead.
+func (*ReserveStockResponse) Descriptor() ([]byte, []int) {
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ReserveStockResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ReserveStockResponse) GetFailedSkuIds() []string {
+	if x != nil {
+		return x.FailedSkuIds
+	}
+	return nil
+}
+
+type ReleaseStockRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TenantId       string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	OrderId        string                 `protobuf:"bytes,2,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	Reason         string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	IdempotencyKey string                 `protobuf:"bytes,4,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	Lines          []*StockLine           `protobuf:"bytes,5,rep,name=lines,proto3" json:"lines,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ReleaseStockRequest) Reset() {
+	*x = ReleaseStockRequest{}
+	mi := &file_stock_v1_stock_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseStockRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseStockRequest) ProtoMessage() {}
+
+func (x *ReleaseStockRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stock_v1_stock_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseStockRequest.ProtoReflect.Descriptor instead.
+func (*ReleaseStockRequest) Descriptor() ([]byte, []int) {
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ReleaseStockRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *ReleaseStockRequest) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+func (x *ReleaseStockRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *ReleaseStockRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
+}
+
+func (x *ReleaseStockRequest) GetLines() []*StockLine {
+	if x != nil {
+		return x.Lines
+	}
+	return nil
+}
+
+type ReleaseStockResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Success        bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ReleasedSkuIds []string               `protobuf:"bytes,2,rep,name=released_sku_ids,json=releasedSkuIds,proto3" json:"released_sku_ids,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ReleaseStockResponse) Reset() {
+	*x = ReleaseStockResponse{}
+	mi := &file_stock_v1_stock_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseStockResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseStockResponse) ProtoMessage() {}
+
+func (x *ReleaseStockResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_stock_v1_stock_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseStockResponse.ProtoReflect.Descriptor instead.
+func (*ReleaseStockResponse) Descriptor() ([]byte, []int) {
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ReleaseStockResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ReleaseStockResponse) GetReleasedSkuIds() []string {
+	if x != nil {
+		return x.ReleasedSkuIds
 	}
 	return nil
 }
@@ -382,7 +698,7 @@ type UnlockStockForAuditRequest struct {
 
 func (x *UnlockStockForAuditRequest) Reset() {
 	*x = UnlockStockForAuditRequest{}
-	mi := &file_stock_v1_stock_proto_msgTypes[5]
+	mi := &file_stock_v1_stock_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -394,7 +710,7 @@ func (x *UnlockStockForAuditRequest) String() string {
 func (*UnlockStockForAuditRequest) ProtoMessage() {}
 
 func (x *UnlockStockForAuditRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_v1_stock_proto_msgTypes[5]
+	mi := &file_stock_v1_stock_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -407,7 +723,7 @@ func (x *UnlockStockForAuditRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnlockStockForAuditRequest.ProtoReflect.Descriptor instead.
 func (*UnlockStockForAuditRequest) Descriptor() ([]byte, []int) {
-	return file_stock_v1_stock_proto_rawDescGZIP(), []int{5}
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *UnlockStockForAuditRequest) GetTenantId() string {
@@ -455,7 +771,7 @@ type UnlockStockForAuditResponse struct {
 
 func (x *UnlockStockForAuditResponse) Reset() {
 	*x = UnlockStockForAuditResponse{}
-	mi := &file_stock_v1_stock_proto_msgTypes[6]
+	mi := &file_stock_v1_stock_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -467,7 +783,7 @@ func (x *UnlockStockForAuditResponse) String() string {
 func (*UnlockStockForAuditResponse) ProtoMessage() {}
 
 func (x *UnlockStockForAuditResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stock_v1_stock_proto_msgTypes[6]
+	mi := &file_stock_v1_stock_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -480,7 +796,7 @@ func (x *UnlockStockForAuditResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnlockStockForAuditResponse.ProtoReflect.Descriptor instead.
 func (*UnlockStockForAuditResponse) Descriptor() ([]byte, []int) {
-	return file_stock_v1_stock_proto_rawDescGZIP(), []int{6}
+	return file_stock_v1_stock_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *UnlockStockForAuditResponse) GetSuccess() bool {
@@ -501,7 +817,11 @@ var File_stock_v1_stock_proto protoreflect.FileDescriptor
 
 const file_stock_v1_stock_proto_rawDesc = "" +
 	"\n" +
-	"\x14stock/v1/stock.proto\x12\bstock.v1\"\xeb\x01\n" +
+	"\x14stock/v1/stock.proto\x12\bstock.v1\"a\n" +
+	"\tStockLine\x12\x15\n" +
+	"\x06sku_id\x18\x01 \x01(\tR\x05skuId\x12!\n" +
+	"\fwarehouse_id\x18\x02 \x01(\tR\vwarehouseId\x12\x1a\n" +
+	"\bquantity\x18\x03 \x01(\x05R\bquantity\"\xeb\x01\n" +
 	"\x12AdjustStockRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06sku_id\x18\x02 \x01(\tR\x05skuId\x12!\n" +
@@ -516,18 +836,36 @@ const file_stock_v1_stock_proto_rawDesc = "" +
 	"\freserved_qty\x18\x03 \x01(\x05R\vreservedQty\x12#\n" +
 	"\rallocated_qty\x18\x04 \x01(\x05R\fallocatedQty\x12&\n" +
 	"\x0fis_clamped_zero\x18\x05 \x01(\bR\risClampedZero\x12\x19\n" +
-	"\bevent_id\x18\x06 \x01(\tR\aeventId\"\x80\x01\n" +
+	"\bevent_id\x18\x06 \x01(\tR\aeventId\"\xab\x01\n" +
 	"\x1dConfirmStockAllocationRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x19\n" +
 	"\border_id\x18\x02 \x01(\tR\aorderId\x12'\n" +
-	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\"t\n" +
+	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\x12)\n" +
+	"\x05lines\x18\x04 \x03(\v2\x13.stock.v1.StockLineR\x05lines\"t\n" +
 	"\x13StockAllocationLine\x12\x15\n" +
 	"\x06sku_id\x18\x01 \x01(\tR\x05skuId\x12!\n" +
 	"\fwarehouse_id\x18\x02 \x01(\tR\vwarehouseId\x12#\n" +
 	"\rallocated_qty\x18\x03 \x01(\x05R\fallocatedQty\"o\n" +
 	"\x1eConfirmStockAllocationResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x123\n" +
-	"\x05lines\x18\x02 \x03(\v2\x1d.stock.v1.StockAllocationLineR\x05lines\"\xa6\x01\n" +
+	"\x05lines\x18\x02 \x03(\v2\x1d.stock.v1.StockAllocationLineR\x05lines\"\xa1\x01\n" +
+	"\x13ReserveStockRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x19\n" +
+	"\border_id\x18\x02 \x01(\tR\aorderId\x12'\n" +
+	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\x12)\n" +
+	"\x05lines\x18\x04 \x03(\v2\x13.stock.v1.StockLineR\x05lines\"V\n" +
+	"\x14ReserveStockResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12$\n" +
+	"\x0efailed_sku_ids\x18\x02 \x03(\tR\ffailedSkuIds\"\xb9\x01\n" +
+	"\x13ReleaseStockRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x19\n" +
+	"\border_id\x18\x02 \x01(\tR\aorderId\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12'\n" +
+	"\x0fidempotency_key\x18\x04 \x01(\tR\x0eidempotencyKey\x12)\n" +
+	"\x05lines\x18\x05 \x03(\v2\x13.stock.v1.StockLineR\x05lines\"Z\n" +
+	"\x14ReleaseStockResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12(\n" +
+	"\x10released_sku_ids\x18\x02 \x03(\tR\x0ereleasedSkuIds\"\xa6\x01\n" +
 	"\x1aUnlockStockForAuditRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06sku_id\x18\x02 \x01(\tR\x05skuId\x12!\n" +
@@ -537,9 +875,11 @@ const file_stock_v1_stock_proto_rawDesc = "" +
 	"\x1bUnlockStockForAuditResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1f\n" +
 	"\vis_unlocked\x18\x02 \x01(\bR\n" +
-	"isUnlocked2\xab\x02\n" +
+	"isUnlocked2\xc9\x03\n" +
 	"\fStockService\x12J\n" +
-	"\vAdjustStock\x12\x1c.stock.v1.AdjustStockRequest\x1a\x1d.stock.v1.AdjustStockResponse\x12k\n" +
+	"\vAdjustStock\x12\x1c.stock.v1.AdjustStockRequest\x1a\x1d.stock.v1.AdjustStockResponse\x12M\n" +
+	"\fReserveStock\x12\x1d.stock.v1.ReserveStockRequest\x1a\x1e.stock.v1.ReserveStockResponse\x12M\n" +
+	"\fReleaseStock\x12\x1d.stock.v1.ReleaseStockRequest\x1a\x1e.stock.v1.ReleaseStockResponse\x12k\n" +
 	"\x16ConfirmStockAllocation\x12'.stock.v1.ConfirmStockAllocationRequest\x1a(.stock.v1.ConfirmStockAllocationResponse\x12b\n" +
 	"\x13UnlockStockForAudit\x12$.stock.v1.UnlockStockForAuditRequest\x1a%.stock.v1.UnlockStockForAuditResponseB;Z9github.com/seifsheikhelarab/taper/gen/go/stock/v1;stockv1b\x06proto3"
 
@@ -555,29 +895,41 @@ func file_stock_v1_stock_proto_rawDescGZIP() []byte {
 	return file_stock_v1_stock_proto_rawDescData
 }
 
-var file_stock_v1_stock_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_stock_v1_stock_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_stock_v1_stock_proto_goTypes = []any{
-	(*AdjustStockRequest)(nil),             // 0: stock.v1.AdjustStockRequest
-	(*AdjustStockResponse)(nil),            // 1: stock.v1.AdjustStockResponse
-	(*ConfirmStockAllocationRequest)(nil),  // 2: stock.v1.ConfirmStockAllocationRequest
-	(*StockAllocationLine)(nil),            // 3: stock.v1.StockAllocationLine
-	(*ConfirmStockAllocationResponse)(nil), // 4: stock.v1.ConfirmStockAllocationResponse
-	(*UnlockStockForAuditRequest)(nil),     // 5: stock.v1.UnlockStockForAuditRequest
-	(*UnlockStockForAuditResponse)(nil),    // 6: stock.v1.UnlockStockForAuditResponse
+	(*StockLine)(nil),                      // 0: stock.v1.StockLine
+	(*AdjustStockRequest)(nil),             // 1: stock.v1.AdjustStockRequest
+	(*AdjustStockResponse)(nil),            // 2: stock.v1.AdjustStockResponse
+	(*ConfirmStockAllocationRequest)(nil),  // 3: stock.v1.ConfirmStockAllocationRequest
+	(*StockAllocationLine)(nil),            // 4: stock.v1.StockAllocationLine
+	(*ConfirmStockAllocationResponse)(nil), // 5: stock.v1.ConfirmStockAllocationResponse
+	(*ReserveStockRequest)(nil),            // 6: stock.v1.ReserveStockRequest
+	(*ReserveStockResponse)(nil),           // 7: stock.v1.ReserveStockResponse
+	(*ReleaseStockRequest)(nil),            // 8: stock.v1.ReleaseStockRequest
+	(*ReleaseStockResponse)(nil),           // 9: stock.v1.ReleaseStockResponse
+	(*UnlockStockForAuditRequest)(nil),     // 10: stock.v1.UnlockStockForAuditRequest
+	(*UnlockStockForAuditResponse)(nil),    // 11: stock.v1.UnlockStockForAuditResponse
 }
 var file_stock_v1_stock_proto_depIdxs = []int32{
-	3, // 0: stock.v1.ConfirmStockAllocationResponse.lines:type_name -> stock.v1.StockAllocationLine
-	0, // 1: stock.v1.StockService.AdjustStock:input_type -> stock.v1.AdjustStockRequest
-	2, // 2: stock.v1.StockService.ConfirmStockAllocation:input_type -> stock.v1.ConfirmStockAllocationRequest
-	5, // 3: stock.v1.StockService.UnlockStockForAudit:input_type -> stock.v1.UnlockStockForAuditRequest
-	1, // 4: stock.v1.StockService.AdjustStock:output_type -> stock.v1.AdjustStockResponse
-	4, // 5: stock.v1.StockService.ConfirmStockAllocation:output_type -> stock.v1.ConfirmStockAllocationResponse
-	6, // 6: stock.v1.StockService.UnlockStockForAudit:output_type -> stock.v1.UnlockStockForAuditResponse
-	4, // [4:7] is the sub-list for method output_type
-	1, // [1:4] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0,  // 0: stock.v1.ConfirmStockAllocationRequest.lines:type_name -> stock.v1.StockLine
+	4,  // 1: stock.v1.ConfirmStockAllocationResponse.lines:type_name -> stock.v1.StockAllocationLine
+	0,  // 2: stock.v1.ReserveStockRequest.lines:type_name -> stock.v1.StockLine
+	0,  // 3: stock.v1.ReleaseStockRequest.lines:type_name -> stock.v1.StockLine
+	1,  // 4: stock.v1.StockService.AdjustStock:input_type -> stock.v1.AdjustStockRequest
+	6,  // 5: stock.v1.StockService.ReserveStock:input_type -> stock.v1.ReserveStockRequest
+	8,  // 6: stock.v1.StockService.ReleaseStock:input_type -> stock.v1.ReleaseStockRequest
+	3,  // 7: stock.v1.StockService.ConfirmStockAllocation:input_type -> stock.v1.ConfirmStockAllocationRequest
+	10, // 8: stock.v1.StockService.UnlockStockForAudit:input_type -> stock.v1.UnlockStockForAuditRequest
+	2,  // 9: stock.v1.StockService.AdjustStock:output_type -> stock.v1.AdjustStockResponse
+	7,  // 10: stock.v1.StockService.ReserveStock:output_type -> stock.v1.ReserveStockResponse
+	9,  // 11: stock.v1.StockService.ReleaseStock:output_type -> stock.v1.ReleaseStockResponse
+	5,  // 12: stock.v1.StockService.ConfirmStockAllocation:output_type -> stock.v1.ConfirmStockAllocationResponse
+	11, // 13: stock.v1.StockService.UnlockStockForAudit:output_type -> stock.v1.UnlockStockForAuditResponse
+	9,  // [9:14] is the sub-list for method output_type
+	4,  // [4:9] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_stock_v1_stock_proto_init() }
@@ -591,7 +943,7 @@ func file_stock_v1_stock_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stock_v1_stock_proto_rawDesc), len(file_stock_v1_stock_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

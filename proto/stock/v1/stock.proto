@@ -6,8 +6,16 @@ option go_package = "github.com/seifsheikhelarab/taper/gen/go/stock/v1;stockv1";
 
 service StockService {
   rpc AdjustStock(AdjustStockRequest) returns (AdjustStockResponse);
+  rpc ReserveStock(ReserveStockRequest) returns (ReserveStockResponse);
+  rpc ReleaseStock(ReleaseStockRequest) returns (ReleaseStockResponse);
   rpc ConfirmStockAllocation(ConfirmStockAllocationRequest) returns (ConfirmStockAllocationResponse);
   rpc UnlockStockForAudit(UnlockStockForAuditRequest) returns (UnlockStockForAuditResponse);
+}
+
+message StockLine {
+  string sku_id = 1;
+  string warehouse_id = 2;
+  int32 quantity = 3;
 }
 
 message AdjustStockRequest {
@@ -33,6 +41,7 @@ message ConfirmStockAllocationRequest {
   string tenant_id = 1;
   string order_id = 2;
   string idempotency_key = 3;
+  repeated StockLine lines = 4;
 }
 
 message StockAllocationLine {
@@ -44,6 +53,31 @@ message StockAllocationLine {
 message ConfirmStockAllocationResponse {
   bool success = 1;
   repeated StockAllocationLine lines = 2;
+}
+
+message ReserveStockRequest {
+  string tenant_id = 1;
+  string order_id = 2;
+  string idempotency_key = 3;
+  repeated StockLine lines = 4;
+}
+
+message ReserveStockResponse {
+  bool success = 1;
+  repeated string failed_sku_ids = 2;
+}
+
+message ReleaseStockRequest {
+  string tenant_id = 1;
+  string order_id = 2;
+  string reason = 3;
+  string idempotency_key = 4;
+  repeated StockLine lines = 5;
+}
+
+message ReleaseStockResponse {
+  bool success = 1;
+  repeated string released_sku_ids = 2;
 }
 
 message UnlockStockForAuditRequest {
