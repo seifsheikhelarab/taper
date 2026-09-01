@@ -243,3 +243,64 @@ func (s *Server) Release(ctx context.Context, req *resv1.ReleaseRequest) (*resv1
 	}
 	return &resv1.ReleaseResponse{Success: true, ReleasedSkuIds: released}, nil
 }
+
+// AllocateReservation transitions ACTIVE reservations to ALLOCATED status (US5).
+// This is called after ConfirmStockAllocation succeeds to prevent sweeper from
+// releasing confirmed order inventory.
+func (s *Server) AllocateReservation(ctx context.Context, req *resv1.AllocateReservationRequest) (*resv1.AllocateReservationResponse, error) {
+	tenantUUID, err := database.ParseUUID(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	ctx = database.WithTenantID(ctx, req.GetTenantId())
+
+	var count int32
+	err = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {
+		q := resdb.New(tx)
+
+		// Check idempotency.
+		if req.GetIdempotencyKey() != "" {
+			_, err := q.CheckAndInsertIdempotencyKey(ctx, resdb.CheckAndInsertIdempotencyKeyParams{
+				TenantID:       tenantUUID,
+				IdempotencyKey: req.GetIdempotencyKey(),
+				PayloadHash:    hashPayload(req),
+			})
+			if err == pgx.ErrNoRows {
+				// Already allocated - return success (idempotent).
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+		}
+
+		rows, err := q.GetActiveReservationsByOrder(ctx, req.GetOrderId())
+		if err != nil {
+			return err
+		}
+
+		for _, r := range rows {
+			if _, err := q.UpdateReservationStatus(ctx, resdb.UpdateReservationStatusParams{
+				ID:     r.ID,
+				Status: StatusAllocated,
+			}); err != nil {
+				return err
+			}
+			if _, err := q.InsertOutboxEvent(ctx, resdb.InsertOutboxEventParams{
+				TenantID:      tenantUUID,
+				AggregateType: "reservation",
+				AggregateID:   req.GetOrderId(),
+				EventType:     "reservation.allocated",
+				Payload:       []byte(`{"order_id":"` + req.GetOrderId() + `"}`),
+			}); err != nil {
+				return err
+			}
+			count++
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "allocate reservation: %v", err)
+	}
+	return &resv1.AllocateReservationResponse{Success: true, AllocatedCount: count}, nil
+}

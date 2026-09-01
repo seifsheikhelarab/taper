@@ -353,6 +353,118 @@ func (x *ReleaseResponse) GetReleasedSkuIds() []string {
 	return nil
 }
 
+type AllocateReservationRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TenantId       string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	OrderId        string                 `protobuf:"bytes,2,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	IdempotencyKey string                 `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *AllocateReservationRequest) Reset() {
+	*x = AllocateReservationRequest{}
+	mi := &file_reservation_v1_reservation_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AllocateReservationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AllocateReservationRequest) ProtoMessage() {}
+
+func (x *AllocateReservationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_reservation_v1_reservation_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AllocateReservationRequest.ProtoReflect.Descriptor instead.
+func (*AllocateReservationRequest) Descriptor() ([]byte, []int) {
+	return file_reservation_v1_reservation_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *AllocateReservationRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AllocateReservationRequest) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+func (x *AllocateReservationRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
+}
+
+type AllocateReservationResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Success        bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	AllocatedCount int32                  `protobuf:"varint,2,opt,name=allocated_count,json=allocatedCount,proto3" json:"allocated_count,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *AllocateReservationResponse) Reset() {
+	*x = AllocateReservationResponse{}
+	mi := &file_reservation_v1_reservation_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AllocateReservationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AllocateReservationResponse) ProtoMessage() {}
+
+func (x *AllocateReservationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_reservation_v1_reservation_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AllocateReservationResponse.ProtoReflect.Descriptor instead.
+func (*AllocateReservationResponse) Descriptor() ([]byte, []int) {
+	return file_reservation_v1_reservation_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *AllocateReservationResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *AllocateReservationResponse) GetAllocatedCount() int32 {
+	if x != nil {
+		return x.AllocatedCount
+	}
+	return 0
+}
+
 var File_reservation_v1_reservation_proto protoreflect.FileDescriptor
 
 const file_reservation_v1_reservation_proto_rawDesc = "" +
@@ -382,10 +494,18 @@ const file_reservation_v1_reservation_proto_rawDesc = "" +
 	"\x0fidempotency_key\x18\x05 \x01(\tR\x0eidempotencyKey\"U\n" +
 	"\x0fReleaseResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12(\n" +
-	"\x10released_sku_ids\x18\x02 \x03(\tR\x0ereleasedSkuIds2\xac\x01\n" +
+	"\x10released_sku_ids\x18\x02 \x03(\tR\x0ereleasedSkuIds\"}\n" +
+	"\x1aAllocateReservationRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x19\n" +
+	"\border_id\x18\x02 \x01(\tR\aorderId\x12'\n" +
+	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\"`\n" +
+	"\x1bAllocateReservationResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12'\n" +
+	"\x0fallocated_count\x18\x02 \x01(\x05R\x0eallocatedCount2\x9c\x02\n" +
 	"\x12ReservationService\x12J\n" +
 	"\aReserve\x12\x1e.reservation.v1.ReserveRequest\x1a\x1f.reservation.v1.ReserveResponse\x12J\n" +
-	"\aRelease\x12\x1e.reservation.v1.ReleaseRequest\x1a\x1f.reservation.v1.ReleaseResponseBGZEgithub.com/seifsheikhelarab/taper/gen/go/reservation/v1;reservationv1b\x06proto3"
+	"\aRelease\x12\x1e.reservation.v1.ReleaseRequest\x1a\x1f.reservation.v1.ReleaseResponse\x12n\n" +
+	"\x13AllocateReservation\x12*.reservation.v1.AllocateReservationRequest\x1a+.reservation.v1.AllocateReservationResponseBGZEgithub.com/seifsheikhelarab/taper/gen/go/reservation/v1;reservationv1b\x06proto3"
 
 var (
 	file_reservation_v1_reservation_proto_rawDescOnce sync.Once
@@ -399,22 +519,26 @@ func file_reservation_v1_reservation_proto_rawDescGZIP() []byte {
 	return file_reservation_v1_reservation_proto_rawDescData
 }
 
-var file_reservation_v1_reservation_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_reservation_v1_reservation_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_reservation_v1_reservation_proto_goTypes = []any{
-	(*ReservationItem)(nil), // 0: reservation.v1.ReservationItem
-	(*ReserveRequest)(nil),  // 1: reservation.v1.ReserveRequest
-	(*ReserveResponse)(nil), // 2: reservation.v1.ReserveResponse
-	(*ReleaseRequest)(nil),  // 3: reservation.v1.ReleaseRequest
-	(*ReleaseResponse)(nil), // 4: reservation.v1.ReleaseResponse
+	(*ReservationItem)(nil),             // 0: reservation.v1.ReservationItem
+	(*ReserveRequest)(nil),              // 1: reservation.v1.ReserveRequest
+	(*ReserveResponse)(nil),             // 2: reservation.v1.ReserveResponse
+	(*ReleaseRequest)(nil),              // 3: reservation.v1.ReleaseRequest
+	(*ReleaseResponse)(nil),             // 4: reservation.v1.ReleaseResponse
+	(*AllocateReservationRequest)(nil),  // 5: reservation.v1.AllocateReservationRequest
+	(*AllocateReservationResponse)(nil), // 6: reservation.v1.AllocateReservationResponse
 }
 var file_reservation_v1_reservation_proto_depIdxs = []int32{
 	0, // 0: reservation.v1.ReserveRequest.items:type_name -> reservation.v1.ReservationItem
 	1, // 1: reservation.v1.ReservationService.Reserve:input_type -> reservation.v1.ReserveRequest
 	3, // 2: reservation.v1.ReservationService.Release:input_type -> reservation.v1.ReleaseRequest
-	2, // 3: reservation.v1.ReservationService.Reserve:output_type -> reservation.v1.ReserveResponse
-	4, // 4: reservation.v1.ReservationService.Release:output_type -> reservation.v1.ReleaseResponse
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
+	5, // 3: reservation.v1.ReservationService.AllocateReservation:input_type -> reservation.v1.AllocateReservationRequest
+	2, // 4: reservation.v1.ReservationService.Reserve:output_type -> reservation.v1.ReserveResponse
+	4, // 5: reservation.v1.ReservationService.Release:output_type -> reservation.v1.ReleaseResponse
+	6, // 6: reservation.v1.ReservationService.AllocateReservation:output_type -> reservation.v1.AllocateReservationResponse
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -431,7 +555,7 @@ func file_reservation_v1_reservation_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_reservation_v1_reservation_proto_rawDesc), len(file_reservation_v1_reservation_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ReservationService_Reserve_FullMethodName = "/reservation.v1.ReservationService/Reserve"
-	ReservationService_Release_FullMethodName = "/reservation.v1.ReservationService/Release"
+	ReservationService_Reserve_FullMethodName             = "/reservation.v1.ReservationService/Reserve"
+	ReservationService_Release_FullMethodName             = "/reservation.v1.ReservationService/Release"
+	ReservationService_AllocateReservation_FullMethodName = "/reservation.v1.ReservationService/AllocateReservation"
 )
 
 // ReservationServiceClient is the client API for ReservationService service.
@@ -29,6 +30,7 @@ const (
 type ReservationServiceClient interface {
 	Reserve(ctx context.Context, in *ReserveRequest, opts ...grpc.CallOption) (*ReserveResponse, error)
 	Release(ctx context.Context, in *ReleaseRequest, opts ...grpc.CallOption) (*ReleaseResponse, error)
+	AllocateReservation(ctx context.Context, in *AllocateReservationRequest, opts ...grpc.CallOption) (*AllocateReservationResponse, error)
 }
 
 type reservationServiceClient struct {
@@ -59,12 +61,23 @@ func (c *reservationServiceClient) Release(ctx context.Context, in *ReleaseReque
 	return out, nil
 }
 
+func (c *reservationServiceClient) AllocateReservation(ctx context.Context, in *AllocateReservationRequest, opts ...grpc.CallOption) (*AllocateReservationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AllocateReservationResponse)
+	err := c.cc.Invoke(ctx, ReservationService_AllocateReservation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ReservationServiceServer is the server API for ReservationService service.
 // All implementations must embed UnimplementedReservationServiceServer
 // for forward compatibility.
 type ReservationServiceServer interface {
 	Reserve(context.Context, *ReserveRequest) (*ReserveResponse, error)
 	Release(context.Context, *ReleaseRequest) (*ReleaseResponse, error)
+	AllocateReservation(context.Context, *AllocateReservationRequest) (*AllocateReservationResponse, error)
 	mustEmbedUnimplementedReservationServiceServer()
 }
 
@@ -80,6 +93,9 @@ func (UnimplementedReservationServiceServer) Reserve(context.Context, *ReserveRe
 }
 func (UnimplementedReservationServiceServer) Release(context.Context, *ReleaseRequest) (*ReleaseResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Release not implemented")
+}
+func (UnimplementedReservationServiceServer) AllocateReservation(context.Context, *AllocateReservationRequest) (*AllocateReservationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AllocateReservation not implemented")
 }
 func (UnimplementedReservationServiceServer) mustEmbedUnimplementedReservationServiceServer() {}
 func (UnimplementedReservationServiceServer) testEmbeddedByValue()                            {}
@@ -138,6 +154,24 @@ func _ReservationService_Release_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ReservationService_AllocateReservation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AllocateReservationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ReservationServiceServer).AllocateReservation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ReservationService_AllocateReservation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ReservationServiceServer).AllocateReservation(ctx, req.(*AllocateReservationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ReservationService_ServiceDesc is the grpc.ServiceDesc for ReservationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -152,6 +186,10 @@ var ReservationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Release",
 			Handler:    _ReservationService_Release_Handler,
+		},
+		{
+			MethodName: "AllocateReservation",
+			Handler:    _ReservationService_AllocateReservation_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

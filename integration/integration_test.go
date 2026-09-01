@@ -51,7 +51,7 @@ func TestHappyPathLifecycle(t *testing.T) {
 		t.Fatalf("after reserve B: available=%d reserved=%d, want 93/7", availB, reservB)
 	}
 
-	// Confirm allocation: reserved -> allocated.
+	// Confirm allocation: reserved -> allocated (stock DB).
 	allocResp, err := e.stock.ConfirmStockAllocation(context.Background(), &stockv1.ConfirmStockAllocationRequest{
 		TenantId:       tenantA,
 		OrderId:        orderID,
@@ -70,6 +70,19 @@ func TestHappyPathLifecycle(t *testing.T) {
 	availA2, reservA2, allocA2 := e.stockLevel(t, tenantA, skuA, wh)
 	if availA2 != 95 || reservA2 != 0 || allocA2 != 5 {
 		t.Fatalf("after alloc A: avail=%d reserved=%d allocated=%d, want 95/0/5", availA2, reservA2, allocA2)
+	}
+
+	// US5: Transition reservation status to ALLOCATED (prevents sweeper release).
+	allocResResp, err := e.reservation.AllocateReservation(context.Background(), &resv1.AllocateReservationRequest{
+		TenantId:       tenantA,
+		OrderId:        orderID,
+		IdempotencyKey: "res-alloc-1",
+	})
+	if err != nil {
+		t.Fatalf("allocate reservation: %v", err)
+	}
+	if !allocResResp.GetSuccess() || allocResResp.GetAllocatedCount() != 2 {
+		t.Fatalf("unexpected allocate reservation response: %+v", allocResResp)
 	}
 
 	// Release must be a no-op now (no active reservations remain for the order).
