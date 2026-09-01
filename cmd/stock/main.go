@@ -4,18 +4,18 @@ import (
 	"context"
 	"log"
 	"net"
-	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 	"github.com/seifsheikhelarab/taper/internal/stockservice"
+	"github.com/seifsheikhelarab/taper/pkg/config"
 )
 
 func main() {
-	addr := envOr("STOCK_ADDR", ":50051")
-	dsn := envOr("STOCK_DATABASE_URL", "postgres://taper_app:taperapp@localhost:5432/taper_db")
+	addr := config.EnvOr("STOCK_ADDR", ":50051")
+	dsn := config.EnvOr("STOCK_DATABASE_URL", "postgres://taper_app:taperapp@localhost:5432/taper_db")
 
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
@@ -36,9 +36,3 @@ func main() {
 	}
 }
 
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
