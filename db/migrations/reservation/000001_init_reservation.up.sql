@@ -30,14 +30,17 @@ CREATE TABLE processed_idempotency_keys (
     PRIMARY KEY (tenant_id, idempotency_key)
 );
 
+CREATE OR REPLACE FUNCTION app_current_tenant() RETURNS UUID LANGUAGE sql STABLE AS
+$$ SELECT NULLIF(current_setting('app.current_tenant_id', true), '')::uuid $$;
+
 ALTER TABLE reservations ENABLE ROW LEVEL SECURITY;
 CREATE POLICY reservations_tenant_isolation_policy ON reservations
-    USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+    USING (tenant_id = app_current_tenant());
 
 ALTER TABLE outbox ENABLE ROW LEVEL SECURITY;
 CREATE POLICY outbox_tenant_isolation_policy ON outbox
-    USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+    USING (tenant_id = app_current_tenant());
 
 ALTER TABLE processed_idempotency_keys ENABLE ROW LEVEL SECURITY;
 CREATE POLICY processed_idempotency_keys_tenant_isolation_policy ON processed_idempotency_keys
-    USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+    USING (tenant_id = app_current_tenant());

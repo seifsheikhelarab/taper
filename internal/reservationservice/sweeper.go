@@ -69,11 +69,13 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 				Quantity:    r.Quantity,
 			})
 		}
+		// Use compensation key to avoid idempotency suppression by stock service.
 		if _, err := s.stock.ReleaseStock(ctx, &stockv1.ReleaseStockRequest{
-			TenantId: k.tenant,
-			OrderId:  k.orderID,
-			Reason:   "ttl_expiry",
-			Lines:    stockLines,
+			TenantId:       k.tenant,
+			OrderId:        k.orderID,
+			Reason:         "ttl_expiry",
+			IdempotencyKey: compensationKey(k.tenant, k.orderID),
+			Lines:          stockLines,
 		}); err != nil {
 			log.Printf("sweeper: release stock order %s: %v", k.orderID, err)
 			continue
@@ -87,7 +89,7 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 func (s *Sweeper) markExpired(ctx context.Context, r resdb.Reservation) {
 	_, err := resdb.New(s.pool).UpdateReservationStatus(ctx, resdb.UpdateReservationStatusParams{
 		ID:     r.ID,
-		Status: "EXPIRED",
+		Status: StatusExpired,
 	})
 	if err != nil {
 		log.Printf("sweeper: mark expired %s: %v", r.ID.String(), err)

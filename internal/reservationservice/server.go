@@ -39,6 +39,7 @@ func (s *Server) Reserve(ctx context.Context, req *resv1.ReserveRequest) (*resv1
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	ctx = database.WithTenantID(ctx, req.GetTenantId())
 	if len(req.GetItems()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "no items provided")
 	}
@@ -74,12 +75,19 @@ func (s *Server) Reserve(ctx context.Context, req *resv1.ReserveRequest) (*resv1
 	expiresAt := time.Now().Add(ttl)
 	reservationID, err := s.insertReservations(ctx, tenantUUID, req, expiresAt)
 	if err != nil {
+		if errors.Is(err, errAlreadyReserved) {
+			// Idempotent replay: reservation already recorded, return cached id.
+			id := s.firstReservationID(ctx, tenantUUID, req.GetOrderId())
+			return &resv1.ReserveResponse{Success: true, ReservationId: id}, nil
+		}
 		// Compensate: release the stock hold taken above.
+		// Use a distinct compensation key to avoid idempotency suppression by stock service.
 		_, _ = s.stock.ReleaseStock(context.Background(), &stockv1.ReleaseStockRequest{
-			TenantId: req.GetTenantId(),
-			OrderId:  req.GetOrderId(),
-			Reason:   "reserve_failure",
-			Lines:    stockLines,
+			TenantId:       req.GetTenantId(),
+			OrderId:        req.GetOrderId(),
+			Reason:         "reserve_failure",
+			IdempotencyKey: compensationKey(req.GetTenantId(), req.GetOrderId()),
+			Lines:          stockLines,
 		})
 		return nil, status.Errorf(codes.Internal, "persist reservation: %v", err)
 	}
@@ -89,6 +97,20 @@ func (s *Server) Reserve(ctx context.Context, req *resv1.ReserveRequest) (*resv1
 		ReservationId: reservationID,
 		ExpiresAtUnix: expiresAt.Unix(),
 	}, nil
+}
+
+// firstReservationID returns the id of the first active reservation for an order.
+func (s *Server) firstReservationID(ctx context.Context, tenantUUID pgtype.UUID, orderID string) string {
+	var id string
+	_ = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := resdb.New(tx).GetActiveReservationsByOrder(ctx, orderID)
+		if err != nil || len(rows) == 0 {
+			return nil
+		}
+		id = rows[0].ID.String()
+		return nil
+	})
+	return id
 }
 
 func (s *Server) insertReservations(ctx context.Context, tenantUUID pgtype.UUID, req *resv1.ReserveRequest, expiresAt time.Time) (string, error) {
@@ -115,7 +137,7 @@ func (s *Server) insertReservations(ctx context.Context, tenantUUID pgtype.UUID,
 				SkuID:       it.GetSkuId(),
 				WarehouseID: it.GetWarehouseId(),
 				Quantity:    it.GetQuantity(),
-				Status:      "ACTIVE",
+				Status:      StatusActive,
 				ExpiresAt:   pgtypeTimestamptz(expiresAt),
 			})
 			if err != nil {
@@ -145,6 +167,7 @@ func (s *Server) Release(ctx context.Context, req *resv1.ReleaseRequest) (*resv1
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	ctx = database.WithTenantID(ctx, req.GetTenantId())
 
 	var released []string
 	err = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {
@@ -182,10 +205,11 @@ func (s *Server) Release(ctx context.Context, req *resv1.ReleaseRequest) (*resv1
 
 		// Return stock to available.
 		stockResp, err := s.stock.ReleaseStock(ctx, &stockv1.ReleaseStockRequest{
-			TenantId: req.GetTenantId(),
-			OrderId:  req.GetOrderId(),
-			Reason:   req.GetReason(),
-			Lines:    stockLines,
+			TenantId:       req.GetTenantId(),
+			OrderId:        req.GetOrderId(),
+			Reason:         req.GetReason(),
+			IdempotencyKey: req.GetIdempotencyKey(),
+			Lines:          stockLines,
 		})
 		if err != nil {
 			return err
@@ -195,7 +219,7 @@ func (s *Server) Release(ctx context.Context, req *resv1.ReleaseRequest) (*resv1
 		for _, r := range rows {
 			if _, err := q.UpdateReservationStatus(ctx, resdb.UpdateReservationStatusParams{
 				ID:     r.ID,
-				Status: "RELEASED",
+				Status: StatusReleased,
 			}); err != nil {
 				return err
 			}

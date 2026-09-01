@@ -15,7 +15,7 @@ import (
 
 func main() {
 	addr := envOr("STOCK_ADDR", ":50051")
-	dsn := envOr("DATABASE_URL", "postgres://postgres:postgrespassword@localhost:5432/taper_db")
+	dsn := envOr("STOCK_DATABASE_URL", "postgres://taper_app:taperapp@localhost:5432/taper_db")
 
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {

@@ -36,6 +36,8 @@ func applyIdempotency(ctx context.Context, q *stockdb.Queries, tenantID pgtype.U
 }
 
 // tryIdempotency reports whether the key was already processed (duplicate).
+// A duplicate means the prior attempt committed, so the caller must return
+// the cached response without mutating anything (US8 exact-once).
 func tryIdempotency(ctx context.Context, q *stockdb.Queries, tenantID pgtype.UUID, key string, msg proto.Message) (bool, error) {
 	if key == "" {
 		return false, nil

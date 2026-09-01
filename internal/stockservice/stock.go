@@ -2,6 +2,7 @@ package stockservice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
@@ -30,13 +31,34 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	ctx = database.WithTenantID(ctx, req.GetTenantId())
 
 	var resp *stockv1.AdjustStockResponse
 	err = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {
 		q := stockdb.New(tx)
 
-		if err := applyIdempotency(ctx, q, tenantUUID, req.GetIdempotencyKey(), req); err != nil {
+		dup, err := tryIdempotency(ctx, q, tenantUUID, req.GetIdempotencyKey(), req)
+		if err != nil {
 			return err
+		}
+		if dup {
+			// Idempotent replay: return cached response.
+			level, err := q.GetStockLevelForUpdate(ctx, stockdb.GetStockLevelForUpdateParams{
+				TenantID:    tenantUUID,
+				SkuID:       req.GetSkuId(),
+				WarehouseID: req.GetWarehouseId(),
+			})
+			if err != nil {
+				return err
+			}
+			resp = &stockv1.AdjustStockResponse{
+				Success:       true,
+				AvailableQty:  level.AvailableQty,
+				ReservedQty:   level.ReservedQty,
+				AllocatedQty:  level.AllocatedQty,
+				IsClampedZero: level.AvailableQty == 0,
+			}
+			return nil
 		}
 
 		if _, err := q.UpsertStockLevel(ctx, stockdb.UpsertStockLevelParams{
@@ -84,7 +106,7 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 			Delta:       req.GetQuantityDelta(),
 			Reason:      req.GetReason(),
 			Source:      req.GetSource(),
-			ActorID:     req.GetSource(),
+			ActorID:     "system",
 		})
 		if err != nil {
 			return err
@@ -92,10 +114,9 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 
 		payload, _ := marshalAdjustEvent(req)
 		_, err = q.InsertOutboxEvent(ctx, stockdb.InsertOutboxEventParams{
-			TenantID:      tenantUUID,
-			AggregateType: "stock",
-			AggregateID:   req.GetSkuId(),
-			EventType:     "stock.adjusted",
+			TenantID:      tenantUUID,				AggregateType: "stock",
+				AggregateID:   tenantUUID.String() + ":" + req.GetSkuId(),
+				EventType:     "stock.adjusted",
 			Payload:       payload,
 		})
 		if err != nil {
@@ -110,6 +131,26 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 			IsClampedZero: clamped,
 			EventId:       event.ID.String(),
 		}
+
+		// US11: emit deficit alert if stock was clamped.
+		if clamped {
+			deficitPayload, _ := json.Marshal(map[string]any{
+				"sku_id":       req.GetSkuId(),
+				"warehouse_id": req.GetWarehouseId(),
+				"delta":        req.GetQuantityDelta(),
+				"reason":       req.GetReason(),
+			})
+			if _, err := q.InsertOutboxEvent(ctx, stockdb.InsertOutboxEventParams{
+				TenantID:      tenantUUID,
+				AggregateType: "stock",
+				AggregateID:   tenantUUID.String() + ":" + req.GetSkuId(),
+				EventType:     "stock.deficit_alert",
+				Payload:       deficitPayload,
+			}); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -124,6 +165,7 @@ func (s *Server) ReserveStock(ctx context.Context, req *stockv1.ReserveStockRequ
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	ctx = database.WithTenantID(ctx, req.GetTenantId())
 	lines := sortedLines(req.GetLines())
 	if len(lines) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "no lines provided")
@@ -183,7 +225,7 @@ func (s *Server) ReserveStock(ctx context.Context, req *stockv1.ReserveStockRequ
 			if _, err := q.InsertOutboxEvent(ctx, stockdb.InsertOutboxEventParams{
 				TenantID:      tenantUUID,
 				AggregateType: "stock",
-				AggregateID:   l.SkuId,
+				AggregateID:   tenantUUID.String() + ":" + l.SkuId,
 				EventType:     "stock.reserved",
 				Payload:       marshalLineEvent("reserve", req.GetOrderId(), l),
 			}); err != nil {
@@ -214,13 +256,20 @@ func (s *Server) ReleaseStock(ctx context.Context, req *stockv1.ReleaseStockRequ
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	ctx = database.WithTenantID(ctx, req.GetTenantId())
 	lines := sortedLines(req.GetLines())
 
 	var resp *stockv1.ReleaseStockResponse
 	err = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {
 		q := stockdb.New(tx)
-		if err := applyIdempotency(ctx, q, tenantUUID, req.GetIdempotencyKey(), req); err != nil {
+		dup, err := tryIdempotency(ctx, q, tenantUUID, req.GetIdempotencyKey(), req)
+		if err != nil {
 			return err
+		}
+		if dup {
+			// Idempotent replay: return cached success.
+			resp = &stockv1.ReleaseStockResponse{Success: true}
+			return nil
 		}
 		var released []string
 		for _, l := range lines {
@@ -261,7 +310,7 @@ func (s *Server) ReleaseStock(ctx context.Context, req *stockv1.ReleaseStockRequ
 			if _, err := q.InsertOutboxEvent(ctx, stockdb.InsertOutboxEventParams{
 				TenantID:      tenantUUID,
 				AggregateType: "stock",
-				AggregateID:   l.SkuId,
+				AggregateID:   tenantUUID.String() + ":" + l.SkuId,
 				EventType:     "stock.released",
 				Payload:       marshalLineEvent("release", req.GetOrderId(), l),
 			}); err != nil {
@@ -284,13 +333,20 @@ func (s *Server) ConfirmStockAllocation(ctx context.Context, req *stockv1.Confir
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	ctx = database.WithTenantID(ctx, req.GetTenantId())
 	lines := sortedLines(req.GetLines())
 
 	var resp *stockv1.ConfirmStockAllocationResponse
 	err = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {
 		q := stockdb.New(tx)
-		if err := applyIdempotency(ctx, q, tenantUUID, req.GetIdempotencyKey(), req); err != nil {
+		dup, err := tryIdempotency(ctx, q, tenantUUID, req.GetIdempotencyKey(), req)
+		if err != nil {
 			return err
+		}
+		if dup {
+			// Idempotent replay: return cached success.
+			resp = &stockv1.ConfirmStockAllocationResponse{Success: true}
+			return nil
 		}
 		var out []*stockv1.StockAllocationLine
 		for _, l := range lines {
@@ -317,7 +373,7 @@ func (s *Server) ConfirmStockAllocation(ctx context.Context, req *stockv1.Confir
 			if _, err := q.InsertOutboxEvent(ctx, stockdb.InsertOutboxEventParams{
 				TenantID:      tenantUUID,
 				AggregateType: "stock",
-				AggregateID:   l.SkuId,
+				AggregateID:   tenantUUID.String() + ":" + l.SkuId,
 				EventType:     "stock.allocated",
 				Payload:       marshalLineEvent("allocate", req.GetOrderId(), l),
 			}); err != nil {
@@ -344,6 +400,7 @@ func (s *Server) UnlockStockForAudit(ctx context.Context, req *stockv1.UnlockSto
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	ctx = database.WithTenantID(ctx, req.GetTenantId())
 
 	var resp *stockv1.UnlockStockForAuditResponse
 	err = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {

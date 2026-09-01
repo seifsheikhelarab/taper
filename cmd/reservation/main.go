@@ -18,7 +18,8 @@ import (
 func main() {
 	ctx := context.Background()
 	addr := envOr("RESERVATION_ADDR", ":50052")
-	dsn := envOr("DATABASE_URL", "postgres://postgres:postgrespassword@localhost:5432/taper_db")
+	dsn := envOr("RESERVATION_DATABASE_URL", "postgres://taper_app:taperapp@localhost:5432/reservation_db")
+	sweeperDSN := envOr("SWEEPER_DATABASE_URL", "postgres://taper_sweeper:tapersweeper@localhost:5432/reservation_db")
 	stockAddr := envOr("STOCK_ADDR", ":50051")
 
 	pool, err := pgxpool.New(ctx, dsn)
@@ -26,6 +27,12 @@ func main() {
 		log.Fatalf("connect db: %v", err)
 	}
 	defer pool.Close()
+
+	sweeperPool, err := pgxpool.New(ctx, sweeperDSN)
+	if err != nil {
+		log.Fatalf("connect sweeper db: %v", err)
+	}
+	defer sweeperPool.Close()
 
 	conn, err := grpc.NewClient(stockAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -37,7 +44,7 @@ func main() {
 	srv := grpc.NewServer()
 	resv1.RegisterReservationServiceServer(srv, reservationservice.NewServer(pool, stock))
 
-	sweeper := reservationservice.NewSweeper(pool, stock)
+	sweeper := reservationservice.NewSweeper(sweeperPool, stock)
 	go sweeper.Run(ctx)
 
 	lis, err := net.Listen("tcp", addr)
