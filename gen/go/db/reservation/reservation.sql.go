@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const checkAndInsertIdempotencyKey = `-- name: CheckAndInsertIdempotencyKey :exec
+const checkAndInsertIdempotencyKey = `-- name: CheckAndInsertIdempotencyKey :one
 INSERT INTO processed_idempotency_keys (
     tenant_id,
     idempotency_key,
@@ -20,6 +20,7 @@ INSERT INTO processed_idempotency_keys (
     $1, $2, $3
 )
 ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+RETURNING idempotency_key
 `
 
 type CheckAndInsertIdempotencyKeyParams struct {
@@ -28,15 +29,55 @@ type CheckAndInsertIdempotencyKeyParams struct {
 	PayloadHash    string
 }
 
-func (q *Queries) CheckAndInsertIdempotencyKey(ctx context.Context, arg CheckAndInsertIdempotencyKeyParams) error {
-	_, err := q.db.Exec(ctx, checkAndInsertIdempotencyKey, arg.TenantID, arg.IdempotencyKey, arg.PayloadHash)
-	return err
+func (q *Queries) CheckAndInsertIdempotencyKey(ctx context.Context, arg CheckAndInsertIdempotencyKeyParams) (string, error) {
+	row := q.db.QueryRow(ctx, checkAndInsertIdempotencyKey, arg.TenantID, arg.IdempotencyKey, arg.PayloadHash)
+	var idempotency_key string
+	err := row.Scan(&idempotency_key)
+	return idempotency_key, err
+}
+
+const getActiveReservationsByOrder = `-- name: GetActiveReservationsByOrder :many
+SELECT id, tenant_id, order_id, sku_id, warehouse_id, quantity, status, expires_at, created_at FROM reservations
+WHERE order_id = $1 AND status = 'ACTIVE'
+ORDER BY id
+FOR UPDATE SKIP LOCKED
+`
+
+func (q *Queries) GetActiveReservationsByOrder(ctx context.Context, orderID string) ([]Reservation, error) {
+	rows, err := q.db.Query(ctx, getActiveReservationsByOrder, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Reservation
+	for rows.Next() {
+		var i Reservation
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.OrderID,
+			&i.SkuID,
+			&i.WarehouseID,
+			&i.Quantity,
+			&i.Status,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getExpiredReservations = `-- name: GetExpiredReservations :many
 SELECT id, tenant_id, order_id, sku_id, warehouse_id, quantity, status, expires_at, created_at FROM reservations
 WHERE expires_at < $1 AND status = 'ACTIVE'
 LIMIT $2
+FOR UPDATE SKIP LOCKED
 `
 
 type GetExpiredReservationsParams struct {

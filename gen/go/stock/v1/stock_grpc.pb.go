@@ -20,6 +20,8 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	StockService_AdjustStock_FullMethodName            = "/stock.v1.StockService/AdjustStock"
+	StockService_ReserveStock_FullMethodName           = "/stock.v1.StockService/ReserveStock"
+	StockService_ReleaseStock_FullMethodName           = "/stock.v1.StockService/ReleaseStock"
 	StockService_ConfirmStockAllocation_FullMethodName = "/stock.v1.StockService/ConfirmStockAllocation"
 	StockService_UnlockStockForAudit_FullMethodName    = "/stock.v1.StockService/UnlockStockForAudit"
 )
@@ -29,6 +31,8 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StockServiceClient interface {
 	AdjustStock(ctx context.Context, in *AdjustStockRequest, opts ...grpc.CallOption) (*AdjustStockResponse, error)
+	ReserveStock(ctx context.Context, in *ReserveStockRequest, opts ...grpc.CallOption) (*ReserveStockResponse, error)
+	ReleaseStock(ctx context.Context, in *ReleaseStockRequest, opts ...grpc.CallOption) (*ReleaseStockResponse, error)
 	ConfirmStockAllocation(ctx context.Context, in *ConfirmStockAllocationRequest, opts ...grpc.CallOption) (*ConfirmStockAllocationResponse, error)
 	UnlockStockForAudit(ctx context.Context, in *UnlockStockForAuditRequest, opts ...grpc.CallOption) (*UnlockStockForAuditResponse, error)
 }
@@ -45,6 +49,26 @@ func (c *stockServiceClient) AdjustStock(ctx context.Context, in *AdjustStockReq
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdjustStockResponse)
 	err := c.cc.Invoke(ctx, StockService_AdjustStock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *stockServiceClient) ReserveStock(ctx context.Context, in *ReserveStockRequest, opts ...grpc.CallOption) (*ReserveStockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReserveStockResponse)
+	err := c.cc.Invoke(ctx, StockService_ReserveStock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *stockServiceClient) ReleaseStock(ctx context.Context, in *ReleaseStockRequest, opts ...grpc.CallOption) (*ReleaseStockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseStockResponse)
+	err := c.cc.Invoke(ctx, StockService_ReleaseStock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -76,6 +100,8 @@ func (c *stockServiceClient) UnlockStockForAudit(ctx context.Context, in *Unlock
 // for forward compatibility.
 type StockServiceServer interface {
 	AdjustStock(context.Context, *AdjustStockRequest) (*AdjustStockResponse, error)
+	ReserveStock(context.Context, *ReserveStockRequest) (*ReserveStockResponse, error)
+	ReleaseStock(context.Context, *ReleaseStockRequest) (*ReleaseStockResponse, error)
 	ConfirmStockAllocation(context.Context, *ConfirmStockAllocationRequest) (*ConfirmStockAllocationResponse, error)
 	UnlockStockForAudit(context.Context, *UnlockStockForAuditRequest) (*UnlockStockForAuditResponse, error)
 	mustEmbedUnimplementedStockServiceServer()
@@ -90,6 +116,12 @@ type UnimplementedStockServiceServer struct{}
 
 func (UnimplementedStockServiceServer) AdjustStock(context.Context, *AdjustStockRequest) (*AdjustStockResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdjustStock not implemented")
+}
+func (UnimplementedStockServiceServer) ReserveStock(context.Context, *ReserveStockRequest) (*ReserveStockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReserveStock not implemented")
+}
+func (UnimplementedStockServiceServer) ReleaseStock(context.Context, *ReleaseStockRequest) (*ReleaseStockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseStock not implemented")
 }
 func (UnimplementedStockServiceServer) ConfirmStockAllocation(context.Context, *ConfirmStockAllocationRequest) (*ConfirmStockAllocationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConfirmStockAllocation not implemented")
@@ -132,6 +164,42 @@ func _StockService_AdjustStock_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(StockServiceServer).AdjustStock(ctx, req.(*AdjustStockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StockService_ReserveStock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReserveStockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StockServiceServer).ReserveStock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StockService_ReserveStock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StockServiceServer).ReserveStock(ctx, req.(*ReserveStockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StockService_ReleaseStock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseStockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StockServiceServer).ReleaseStock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StockService_ReleaseStock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StockServiceServer).ReleaseStock(ctx, req.(*ReleaseStockRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -182,6 +250,14 @@ var StockService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdjustStock",
 			Handler:    _StockService_AdjustStock_Handler,
+		},
+		{
+			MethodName: "ReserveStock",
+			Handler:    _StockService_ReserveStock_Handler,
+		},
+		{
+			MethodName: "ReleaseStock",
+			Handler:    _StockService_ReleaseStock_Handler,
 		},
 		{
 			MethodName: "ConfirmStockAllocation",

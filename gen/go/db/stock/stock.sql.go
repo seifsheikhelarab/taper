@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const checkAndInsertIdempotencyKey = `-- name: CheckAndInsertIdempotencyKey :exec
+const checkAndInsertIdempotencyKey = `-- name: CheckAndInsertIdempotencyKey :one
 INSERT INTO processed_idempotency_keys (
     tenant_id,
     idempotency_key,
@@ -20,6 +20,7 @@ INSERT INTO processed_idempotency_keys (
     $1, $2, $3
 )
 ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+RETURNING idempotency_key
 `
 
 type CheckAndInsertIdempotencyKeyParams struct {
@@ -28,9 +29,11 @@ type CheckAndInsertIdempotencyKeyParams struct {
 	PayloadHash    string
 }
 
-func (q *Queries) CheckAndInsertIdempotencyKey(ctx context.Context, arg CheckAndInsertIdempotencyKeyParams) error {
-	_, err := q.db.Exec(ctx, checkAndInsertIdempotencyKey, arg.TenantID, arg.IdempotencyKey, arg.PayloadHash)
-	return err
+func (q *Queries) CheckAndInsertIdempotencyKey(ctx context.Context, arg CheckAndInsertIdempotencyKeyParams) (string, error) {
+	row := q.db.QueryRow(ctx, checkAndInsertIdempotencyKey, arg.TenantID, arg.IdempotencyKey, arg.PayloadHash)
+	var idempotency_key string
+	err := row.Scan(&idempotency_key)
+	return idempotency_key, err
 }
 
 const getStockLevelForUpdate = `-- name: GetStockLevelForUpdate :one
@@ -209,6 +212,49 @@ func (q *Queries) UpdateStockLevel(ctx context.Context, arg UpdateStockLevelPara
 		arg.AllocatedQty,
 		arg.IsLockedForAudit,
 		arg.UpdatedAt,
+	)
+	var i StockLevel
+	err := row.Scan(
+		&i.TenantID,
+		&i.SkuID,
+		&i.WarehouseID,
+		&i.AvailableQty,
+		&i.ReservedQty,
+		&i.AllocatedQty,
+		&i.IsLockedForAudit,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertStockLevel = `-- name: UpsertStockLevel :one
+INSERT INTO stock_levels (
+    tenant_id,
+    sku_id,
+    warehouse_id,
+    available_qty
+) VALUES (
+    $1, $2, $3, $4
+)
+ON CONFLICT (tenant_id, sku_id, warehouse_id) DO UPDATE
+SET available_qty = stock_levels.available_qty + EXCLUDED.available_qty,
+    updated_at = NOW()
+RETURNING tenant_id, sku_id, warehouse_id, available_qty, reserved_qty, allocated_qty, is_locked_for_audit, updated_at
+`
+
+type UpsertStockLevelParams struct {
+	TenantID     pgtype.UUID
+	SkuID        string
+	WarehouseID  string
+	AvailableQty int32
+}
+
+func (q *Queries) UpsertStockLevel(ctx context.Context, arg UpsertStockLevelParams) (StockLevel, error) {
+	row := q.db.QueryRow(ctx, upsertStockLevel,
+		arg.TenantID,
+		arg.SkuID,
+		arg.WarehouseID,
+		arg.AvailableQty,
 	)
 	var i StockLevel
 	err := row.Scan(

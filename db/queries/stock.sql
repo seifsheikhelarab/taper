@@ -39,7 +39,7 @@ INSERT INTO outbox (
 )
 RETURNING *;
 
--- name: CheckAndInsertIdempotencyKey :exec
+-- name: CheckAndInsertIdempotencyKey :one
 INSERT INTO processed_idempotency_keys (
     tenant_id,
     idempotency_key,
@@ -47,7 +47,22 @@ INSERT INTO processed_idempotency_keys (
 ) VALUES (
     $1, $2, $3
 )
-ON CONFLICT (tenant_id, idempotency_key) DO NOTHING;
+ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+RETURNING idempotency_key;
+
+-- name: UpsertStockLevel :one
+INSERT INTO stock_levels (
+    tenant_id,
+    sku_id,
+    warehouse_id,
+    available_qty
+) VALUES (
+    $1, $2, $3, $4
+)
+ON CONFLICT (tenant_id, sku_id, warehouse_id) DO UPDATE
+SET available_qty = stock_levels.available_qty + EXCLUDED.available_qty,
+    updated_at = NOW()
+RETURNING *;
 
 -- name: SetAuditLock :exec
 UPDATE stock_levels

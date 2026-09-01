@@ -21,7 +21,14 @@ RETURNING *;
 -- name: GetExpiredReservations :many
 SELECT * FROM reservations
 WHERE expires_at < $1 AND status = 'ACTIVE'
-LIMIT $2;
+LIMIT $2
+FOR UPDATE SKIP LOCKED;
+
+-- name: GetActiveReservationsByOrder :many
+SELECT * FROM reservations
+WHERE order_id = $1 AND status = 'ACTIVE'
+ORDER BY id
+FOR UPDATE SKIP LOCKED;
 
 -- name: InsertOutboxEvent :one
 INSERT INTO outbox (
@@ -35,7 +42,7 @@ INSERT INTO outbox (
 )
 RETURNING *;
 
--- name: CheckAndInsertIdempotencyKey :exec
+-- name: CheckAndInsertIdempotencyKey :one
 INSERT INTO processed_idempotency_keys (
     tenant_id,
     idempotency_key,
@@ -43,7 +50,8 @@ INSERT INTO processed_idempotency_keys (
 ) VALUES (
     $1, $2, $3
 )
-ON CONFLICT (tenant_id, idempotency_key) DO NOTHING;
+ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+RETURNING idempotency_key;
 
 -- name: GetReservation :one
 SELECT * FROM reservations
