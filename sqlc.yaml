@@ -1,0 +1,18 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "db/migrations/stock"
+    queries: "db/queries/stock.sql"
+    gen:
+      go:
+        package: "stock"
+        out: "gen/go/db/stock"
+        sql_package: "pgx/v5"
+  - engine: "postgresql"
+    schema: "db/migrations/reservation"
+    queries: "db/queries/reservation.sql"
+    gen:
+      go:
+        package: "reservation"
+        out: "gen/go/db/reservation"
+        sql_package: "pgx/v5"
