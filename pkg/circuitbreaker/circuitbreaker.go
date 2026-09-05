@@ -14,8 +14,8 @@ var ErrOpen = errors.New("circuit breaker open: dependency unavailable")
 
 // States of the breaker.
 const (
-	Closed   = "closed"   // normal operation
-	Open     = "open"     // failing fast after consecutive failures
+	Closed   = "closed"    // normal operation
+	Open     = "open"      // failing fast after consecutive failures
 	HalfOpen = "half-open" // letting a probe request through
 )
 
@@ -29,9 +29,9 @@ type Config struct {
 
 // Breaker is a goroutine-safe circuit breaker for one downstream dependency.
 type Breaker struct {
-	mu      sync.Mutex
-	cfg     Config
-	state   string
+	mu       sync.Mutex
+	cfg      Config
+	state    string
 	failures int
 	openedAt time.Time
 }
