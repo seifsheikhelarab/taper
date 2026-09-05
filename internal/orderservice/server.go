@@ -32,30 +32,47 @@ import (
 type Saga struct {
 	orderv1.UnimplementedOrderServiceServer
 	pool         *pgxpool.Pool
+	sweeperPool  *pgxpool.Pool // BYPASSRLS role for cross-tenant resume scans
 	reservations resv1.ReservationServiceClient
 	stock        stockv1.StockServiceClient
 	gateway      payment.Gateway
 	defaultTTL   time.Duration
 	// Fail-Fast Policy: fail immediately when downstream deps are down.
-	resBreaker *circuitbreaker.Breaker
-	payBreaker *circuitbreaker.Breaker
+	resBreaker   *circuitbreaker.Breaker
+	payBreaker   *circuitbreaker.Breaker
+	stockBreaker *circuitbreaker.Breaker
 }
 
-func NewSaga(pool *pgxpool.Pool, res resv1.ReservationServiceClient, stock stockv1.StockServiceClient, gw payment.Gateway) *Saga {
+func NewSaga(pool *pgxpool.Pool, sweeperPool *pgxpool.Pool, res resv1.ReservationServiceClient, stock stockv1.StockServiceClient, gw payment.Gateway) *Saga {
 	return &Saga{
 		pool:         pool,
+		sweeperPool:  sweeperPool,
 		reservations: res,
 		stock:        stock,
 		gateway:      gw,
 		defaultTTL:   15 * time.Minute,
 		resBreaker:   circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: 10 * time.Second}),
 		payBreaker:   circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: 10 * time.Second}),
+		stockBreaker: circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: 10 * time.Second}),
 	}
 }
 
 var errIdempotentReplay = errors.New("idempotency key already processed")
 
-// CreateOrder runs the synchronous reserve -> pay -> allocate saga.
+// sagaInput carries everything runSaga needs; it is built either from a
+// CreateOrder request or from persisted rows during crash resume.
+type sagaInput struct {
+	TenantID            string
+	TenantUUID          pgtype.UUID
+	OrderID             string
+	Lines               []*orderv1.OrderLine
+	IdemKey             string
+	TTL                 time.Duration
+	ForcePaymentFailure bool
+}
+
+// CreateOrder validates the request, persists the saga anchor, then runs the
+// synchronous reserve -> pay -> allocate saga.
 func (s *Saga) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (*orderv1.CreateOrderResponse, error) {
 	tenantUUID, err := database.ParseUUID(req.GetTenantId())
 	if err != nil {
@@ -68,8 +85,7 @@ func (s *Saga) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest)
 	if len(req.GetLines()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "no lines provided")
 	}
-	total := orderTotal(req.GetLines())
-	if total <= 0 {
+	if orderTotal(req.GetLines()) <= 0 {
 		return nil, status.Error(codes.InvalidArgument, "order total must be positive")
 	}
 
@@ -79,7 +95,7 @@ func (s *Saga) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest)
 	}
 
 	// Persist order + saga + idempotency anchor in one local transaction.
-	_, err = s.createOrderRow(ctx, tenantUUID, req, total)
+	_, err = s.createOrderRow(ctx, tenantUUID, req, orderTotal(req.GetLines()))
 	if err != nil {
 		if errors.Is(err, errIdempotentReplay) {
 			// Return the outcome of the original run.
@@ -88,50 +104,133 @@ func (s *Saga) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest)
 		return nil, status.Errorf(codes.Internal, "create order: %v", err)
 	}
 
+	return s.runSaga(ctx, sagaInput{
+		TenantID:            req.GetTenantId(),
+		TenantUUID:          tenantUUID,
+		OrderID:             req.GetOrderId(),
+		Lines:               req.GetLines(),
+		IdemKey:             req.GetIdempotencyKey(),
+		TTL:                 ttl,
+		ForcePaymentFailure: req.GetForcePaymentFailure(),
+	})
+}
+
+// ResumePendingSagas re-drives sagas stuck in a non-terminal state after a
+// crash (spec US5: durable state so a crashed orchestrator resumes
+// exactly-once). Safe to call periodically; every step is idempotently keyed.
+func (s *Saga) ResumePendingSagas(ctx context.Context, limit int32) error {
+	type resumeRow struct {
+		TenantID       pgtype.UUID
+		OrderID        string
+		IdempotencyKey string
+	}
+	var rows []resumeRow
+	err := database.ExecTxNoTenant(ctx, s.sweeperPool, func(tx pgx.Tx) error {
+		// Cross-tenant maintenance query (FOR UPDATE SKIP LOCKED) via the
+		// BYPASSRLS sweeper role, mirroring the Phase 1 TTL sweeper. Normal
+		// request traffic stays RLS-scoped on the app pool.
+		got, err := orderdb.New(tx).GetResumableSagas(ctx, limit)
+		if err != nil {
+			return err
+		}
+		rows = make([]resumeRow, 0, len(got))
+		for _, g := range got {
+			rows = append(rows, resumeRow{TenantID: g.TenantID, OrderID: g.OrderID, IdempotencyKey: g.IdempotencyKey})
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("scan resumable sagas: %w", err)
+	}
+	for _, r := range rows {
+		sagaCtx := database.WithTenantID(ctx, r.TenantID.String())
+		// Reload lines from the order row; amounts and TTL were persisted.
+		var lines []*orderv1.OrderLine
+		err := database.ExecTxWithTenant(sagaCtx, s.pool, func(tx pgx.Tx) error {
+			got, err := orderdb.New(tx).GetOrderLines(ctx, r.OrderID)
+			if err != nil {
+				return err
+			}
+			lines = make([]*orderv1.OrderLine, 0, len(got))
+			for _, l := range got {
+				lines = append(lines, &orderv1.OrderLine{
+					SkuId:       l.SkuID,
+					WarehouseId: l.WarehouseID,
+					Quantity:    l.Quantity,
+					UnitPrice:   l.UnitPrice,
+				})
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("resume %s: load lines: %w", r.OrderID, err)
+		}
+		if _, err := s.runSaga(sagaCtx, sagaInput{
+			TenantID:   r.TenantID.String(),
+			TenantUUID: r.TenantID,
+			OrderID:    r.OrderID,
+			Lines:      lines,
+			IdemKey:    r.IdempotencyKey,
+			TTL:        s.defaultTTL,
+		}); err != nil {
+			// Keep resuming the rest; the failed saga stays non-terminal and
+			// will be picked up on the next pass.
+			continue
+		}
+	}
+	return nil
+}
+
+// runSaga executes (or replays) the reserve -> pay -> allocate -> confirm
+// steps. Every downstream step is keyed by the order idempotency key plus a
+// step suffix, so replaying after a crash is exactly-once at each dependency.
+func (s *Saga) runSaga(ctx context.Context, in sagaInput) (*orderv1.CreateOrderResponse, error) {
 	// Step 1: Reserve (all-or-nothing via reservation service).
 	// Fail-Fast Policy: fail immediately when the breaker is open.
 	if err := s.resBreaker.Allow(); err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	resResp, err := s.reservations.Reserve(ctx, &resv1.ReserveRequest{
-		TenantId:       req.GetTenantId(),
-		OrderId:        req.GetOrderId(),
-		TtlSeconds:     int32(ttl.Seconds()),
-		IdempotencyKey: req.GetIdempotencyKey() + ":reserve",
-		Items:          reserveItems(req.GetLines()),
+		TenantId:       in.TenantID,
+		OrderId:        in.OrderID,
+		TtlSeconds:     int32(in.TTL.Seconds()),
+		IdempotencyKey: in.IdemKey + ":reserve",
+		Items:          reserveItems(in.Lines),
 	})
 	if err != nil {
 		s.resBreaker.RecordFailure()
-		_ = s.failSaga(ctx, req.GetTenantId(), req.GetOrderId(), "reserve: "+err.Error())
+		_ = s.failSaga(ctx, in.TenantID, in.OrderID, "reserve: "+err.Error())
 		return nil, status.Errorf(codes.Internal, "reserve: %v", err)
 	}
 	s.resBreaker.RecordSuccess()
 	if !resResp.GetSuccess() {
-		_ = s.failSaga(ctx, req.GetTenantId(), req.GetOrderId(), "insufficient stock")
+		_ = s.failSaga(ctx, in.TenantID, in.OrderID, "insufficient stock")
 		return &orderv1.CreateOrderResponse{
-			OrderId: req.GetOrderId(),
+			OrderId: in.OrderID,
 			Status:  SagaFailed,
 		}, nil
 	}
-	if err := s.transition(ctx, tenantUUID, req.GetOrderId(), SagaReserved, 1, ""); err != nil {
+	// On crash-resume of an already-RESERVED saga this re-emits order.reserved;
+	// outbox consumers are at-least-once, so a duplicate is safe.
+	if err := s.transition(ctx, in.TenantUUID, in.OrderID, SagaReserved, 1, ""); err != nil {
 		return nil, status.Errorf(codes.Internal, "saga transition: %v", err)
 	}
 
 	// Step 2: Charge payment.
 	var chargeErr error
 	var txnID string
-	if req.GetForcePaymentFailure() {
+	if in.ForcePaymentFailure {
 		chargeErr = payment.ErrPaymentDeclined
 	} else {
 		if err := s.payBreaker.Allow(); err != nil {
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
 		res, cerr := s.gateway.Charge(ctx, payment.ChargeRequest{
-			OrderID:  req.GetOrderId(),
-			TenantID: req.GetTenantId(),
-			Amount:   total,
+			OrderID:  in.OrderID,
+			TenantID: in.TenantID,
+			Amount:   orderTotal(in.Lines),
 			Currency: "USD",
-			IdemKey:  req.GetIdempotencyKey() + ":charge",
+			IdemKey:  in.IdemKey + ":charge",
 		})
 		if cerr == nil && res != nil {
 			txnID = res.TransactionID
@@ -147,51 +246,58 @@ func (s *Saga) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest)
 	}
 	if chargeErr != nil {
 		// Compensate: release the held stock, mark compensated.
-		compErr := s.compensate(ctx, req.GetTenantId(), req.GetOrderId(), "payment_failed")
+		compErr := s.compensate(ctx, in.TenantID, in.OrderID, "payment_failed")
 		if compErr != nil {
-			_ = s.failSaga(ctx, req.GetTenantId(), req.GetOrderId(), "payment failed AND compensation error: "+compErr.Error())
+			_ = s.failSaga(ctx, in.TenantID, in.OrderID, "payment failed AND compensation error: "+compErr.Error())
 			return nil, status.Errorf(codes.Internal, "compensate: %v", compErr)
 		}
 		return &orderv1.CreateOrderResponse{
-			OrderId:     req.GetOrderId(),
+			OrderId:     in.OrderID,
 			Status:      SagaCompensated,
-			TotalAmount: total,
+			TotalAmount: orderTotal(in.Lines),
 		}, nil
 	}
 
 	// Persist the transaction reference before allocating.
-	if err := s.recordTransaction(ctx, tenantUUID, req.GetOrderId(), txnID); err != nil {
+	if err := s.recordTransaction(ctx, in.TenantUUID, in.OrderID, txnID); err != nil {
 		return nil, status.Errorf(codes.Internal, "record transaction: %v", err)
 	}
 
 	// Step 3: Allocate (Reserved -> Allocated; sweeper can no longer release).
 	if _, err := s.reservations.AllocateReservation(ctx, &resv1.AllocateReservationRequest{
-		TenantId:       req.GetTenantId(),
-		OrderId:        req.GetOrderId(),
-		IdempotencyKey: req.GetIdempotencyKey() + ":allocate",
+		TenantId:       in.TenantID,
+		OrderId:        in.OrderID,
+		IdempotencyKey: in.IdemKey + ":allocate",
 	}); err != nil {
-		_ = s.failSaga(ctx, req.GetTenantId(), req.GetOrderId(), "allocate: "+err.Error())
+		s.resBreaker.RecordFailure()
+		_ = s.failSaga(ctx, in.TenantID, in.OrderID, "allocate: "+err.Error())
 		return nil, status.Errorf(codes.Internal, "allocate: %v", err)
 	}
+	s.resBreaker.RecordSuccess()
 	// Transition the stock-level rows reserved -> allocated (US5: post-payment
 	// inventory must not sit in reserved where the sweeper could release it).
+	if err := s.stockBreaker.Allow(); err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
 	if _, err := s.stock.ConfirmStockAllocation(ctx, &stockv1.ConfirmStockAllocationRequest{
-		TenantId:       req.GetTenantId(),
-		OrderId:        req.GetOrderId(),
-		IdempotencyKey: req.GetIdempotencyKey() + ":confirm",
-		Lines:          stockLines(req.GetLines()),
+		TenantId:       in.TenantID,
+		OrderId:        in.OrderID,
+		IdempotencyKey: in.IdemKey + ":confirm",
+		Lines:          stockLines(in.Lines),
 	}); err != nil {
-		_ = s.failSaga(ctx, req.GetTenantId(), req.GetOrderId(), "confirm: "+err.Error())
+		s.stockBreaker.RecordFailure()
+		_ = s.failSaga(ctx, in.TenantID, in.OrderID, "confirm: "+err.Error())
 		return nil, status.Errorf(codes.Internal, "confirm: %v", err)
 	}
-	if err := s.transition(ctx, tenantUUID, req.GetOrderId(), SagaConfirmed, 3, ""); err != nil {
+	s.stockBreaker.RecordSuccess()
+	if err := s.transition(ctx, in.TenantUUID, in.OrderID, SagaConfirmed, 3, ""); err != nil {
 		return nil, status.Errorf(codes.Internal, "saga transition: %v", err)
 	}
 
 	return &orderv1.CreateOrderResponse{
-		OrderId:       req.GetOrderId(),
+		OrderId:       in.OrderID,
 		Status:        SagaConfirmed,
-		TotalAmount:   total,
+		TotalAmount:   orderTotal(in.Lines),
 		TransactionId: txnID,
 	}, nil
 }

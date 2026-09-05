@@ -79,3 +79,10 @@ CREATE POLICY outbox_tenant_isolation_policy ON outbox
 
 CREATE POLICY processed_idempotency_keys_tenant_isolation_policy ON processed_idempotency_keys
     USING (tenant_id = app_current_tenant());
+
+-- Service roles: RLS applies to the app role; the sweeper role bypasses RLS
+-- for cross-tenant maintenance (resume worker, pruning).
+GRANT ALL ON ALL TABLES IN SCHEMA public TO taper_app;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO taper_app;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO taper_sweeper;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO taper_sweeper;

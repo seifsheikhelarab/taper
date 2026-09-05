@@ -3,6 +3,7 @@ package orderservice
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 
 	"google.golang.org/protobuf/proto"
 
@@ -17,29 +18,7 @@ func hashPayload(msg proto.Message) string {
 
 // marshalSagaEvent builds the outbox payload for a saga/order transition.
 func marshalSagaEvent(eventType, orderID string, total int64) []byte {
-	return []byte(`{"event_type":"` + eventType + `","order_id":"` + orderID + `","total_amount":` + itoa(total) + `}`)
-}
-
-func itoa(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+	return []byte(`{"event_type":"` + eventType + `","order_id":"` + orderID + `","total_amount":` + strconv.FormatInt(total, 10) + `}`)
 }
 
 // orderTotal sums quantity * unit_price across lines.

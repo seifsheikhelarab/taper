@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	orderv1 "github.com/seifsheikhelarab/taper/gen/go/order/v1"
+	resv1 "github.com/seifsheikhelarab/taper/gen/go/reservation/v1"
 	"github.com/seifsheikhelarab/taper/pkg/database"
 )
 
@@ -302,8 +303,104 @@ func TestSagaExpirySweeperLeavesAllocated(t *testing.T) {
 	}
 }
 
-// Compile-time guard: errors and time stay referenced in future assertions.
-var (
-	_ = errors.New
-	_ = time.Now
-)
+// TestSagaResumeAfterCrash: a saga left in RESERVED (orchestrator died after
+// reserve, before payment) resumes exactly-once when re-driven — no double
+// reserve, no double charge, terminal CONFIRMED.
+func TestSagaResumeAfterCrash(t *testing.T) {
+	e := setup(t)
+	e.seed(t, tenantA, "SKU-SAGA-8", "W1", 10)
+
+	// Simulate a crash: create the order row + saga anchor directly, then run
+	// only the reserve step (what a crashed orchestrator would have done).
+	ctx := database.WithTenantID(context.Background(), tenantA)
+	err := database.ExecTxWithTenant(ctx, e.orderPool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			"INSERT INTO orders (tenant_id, order_id, status, total_amount, currency) VALUES ($1::uuid, $2, 'PENDING', 300, 'USD')",
+			tenantA, "ord-crash"); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			"INSERT INTO saga_instances (tenant_id, order_id, state, step, idempotency_key) VALUES ($1::uuid, $2, 'RESERVED', 1, 'idem-ord-crash')",
+			tenantA, "ord-crash"); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx,
+			"INSERT INTO order_lines (tenant_id, order_id, sku_id, warehouse_id, quantity, unit_price) VALUES ($1::uuid, $2, 'SKU-SAGA-8', 'W1', 3, 100)",
+			tenantA, "ord-crash")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("seed crashed saga: %v", err)
+	}
+
+	// Drive the reserve step the crashed orchestrator completed.
+	if _, err := e.reservation.Reserve(context.Background(), &resv1.ReserveRequest{
+		TenantId:       tenantA,
+		OrderId:        "ord-crash",
+		TtlSeconds:     900,
+		IdempotencyKey: "idem-ord-crash:reserve",
+		Items:          []*resv1.ReservationItem{{SkuId: "SKU-SAGA-8", WarehouseId: "W1", Quantity: 3}},
+	}); err != nil {
+		t.Fatalf("seed reserve: %v", err)
+	}	// Resume via ResumePendingSagas (what a restarted orchestrator does).
+	if err := e.resumeSagas(t, 10); err != nil {
+		t.Fatalf("ResumePendingSagas: %v", err)
+	}
+
+	state, orderStatus := e.orderSagaState(t, tenantA, "ord-crash")
+	if state != "CONFIRMED" || orderStatus != "CONFIRMED" {
+		t.Fatalf("expected resumed saga CONFIRMED, got %s/%s", state, orderStatus)
+	}
+	// Exactly-once: 3 units allocated, nothing extra reserved.
+	avail, res, alloc := e.stockLevel(t, tenantA, "SKU-SAGA-8", "W1")
+	if avail != 7 || res != 0 || alloc != 3 {
+		t.Fatalf("expected 7/0/3 exactly-once after resume, got %d/%d/%d", avail, res, alloc)
+	}
+	if st := e.reservationStatus(t, tenantA, "ord-crash"); st != "ALLOCATED" {
+		t.Fatalf("expected reservation ALLOCATED, got %s", st)
+	}
+}
+
+// TestSagaBreakerOpensAfterConsecutiveReserveFailures: after the reservation
+// dependency keeps failing, CreateOrder fails fast with Unavailable rather
+// than queuing (Fail-Fast Policy).
+func TestSagaBreakerOpensAfterConsecutiveReserveFailures(t *testing.T) {
+	e := setup(t)
+	e.seed(t, tenantA, "SKU-SAGA-9", "W1", 10)
+
+	// Stop the reservation service so every Reserve call errors.
+	e.breakReservation(t)
+	defer e.fixReservation(t)
+
+	breakerTripped := false
+	for i := 0; i < 5; i++ {
+		_, err := e.order.CreateOrder(e.ctx, sagaReq(tenantA, "ord-brk-"+string(rune('a'+i)), []*orderv1.OrderLine{
+			sagaLine("SKU-SAGA-9", "W1", 1, 100),
+		}))
+		if status.Code(err) == codes.Unavailable {
+			breakerTripped = true
+			break
+		}
+		if err != nil && status.Code(err) != codes.Internal {
+			t.Fatalf("unexpected error class: %v", err)
+		}
+	}
+	if !breakerTripped {
+		t.Fatal("expected circuit breaker to open and return Unavailable")
+	}
+
+	// While open: a fresh call fails immediately (well under the gRPC timeout).
+	start := time.Now()
+	_, err := e.order.CreateOrder(e.ctx, sagaReq(tenantA, "ord-brk-fast", []*orderv1.OrderLine{
+		sagaLine("SKU-SAGA-9", "W1", 1, 100),
+	}))
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable while breaker open, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("fail-fast took %v; expected immediate rejection", elapsed)
+	}
+}
+
+// Compile-time guard: errors stays referenced.
+var _ = errors.New

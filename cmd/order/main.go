@@ -20,6 +20,7 @@ import (
 func main() {
 	addr := config.EnvOr("ORDER_ADDR", ":50053")
 	dsn := config.EnvOr("ORDER_DATABASE_URL", "postgres://taper_app:taperapp@localhost:5432/order_db")
+	sweeperDSN := config.EnvOr("ORDER_SWEEPER_DATABASE_URL", "postgres://taper_sweeper:tapersweeper@localhost:5432/order_db")
 	resAddr := config.EnvOr("RESERVATION_ADDR", "localhost:50052")
 	stockAddr := config.EnvOr("STOCK_ADDR", "localhost:50051")
 
@@ -28,6 +29,12 @@ func main() {
 		log.Fatalf("connect db: %v", err)
 	}
 	defer pool.Close()
+
+	sweeperPool, err := pgxpool.New(context.Background(), sweeperDSN)
+	if err != nil {
+		log.Fatalf("connect sweeper db: %v", err)
+	}
+	defer sweeperPool.Close()
 
 	resConn, err := grpc.NewClient(resAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -49,6 +56,7 @@ func main() {
 	srv := grpc.NewServer()
 	orderv1.RegisterOrderServiceServer(srv, orderservice.NewSaga(
 		pool,
+		sweeperPool,
 		resv1.NewReservationServiceClient(resConn),
 		stockv1.NewStockServiceClient(stockConn),
 		payment.NewSandbox(),

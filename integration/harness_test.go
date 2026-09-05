@@ -24,24 +24,54 @@ import (
 )
 
 const (
-	stockDSN       = "postgres://taper_app:taperapp@localhost:5432/taper_db"
-	reservationDSN = "postgres://taper_app:taperapp@localhost:5432/reservation_db"
-	orderDSN       = "postgres://taper_app:taperapp@localhost:5432/order_db"
-	sweeperDSN     = "postgres://taper_sweeper:tapersweeper@localhost:5432/reservation_db"
-	tenantA        = "11111111-1111-1111-1111-111111111111"
-	tenantB        = "22222222-2222-2222-2222-222222222222"
+	stockDSN        = "postgres://taper_app:taperapp@localhost:5432/taper_db"
+	reservationDSN  = "postgres://taper_app:taperapp@localhost:5432/reservation_db"
+	orderDSN        = "postgres://taper_app:taperapp@localhost:5432/order_db"
+	sweeperDSN      = "postgres://taper_sweeper:tapersweeper@localhost:5432/reservation_db"
+	orderSweeperDSN = "postgres://taper_sweeper:tapersweeper@localhost:5432/order_db"
+	tenantA         = "11111111-1111-1111-1111-111111111111"
+	tenantB         = "22222222-2222-2222-2222-222222222222"
 )
 
 type testEnv struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	stock       stockv1.StockServiceClient
-	reservation resv1.ReservationServiceClient
-	order       orderv1.OrderServiceClient
-	stockPool   *pgxpool.Pool
-	resPool     *pgxpool.Pool
-	orderPool   *pgxpool.Pool
-	sweeperPool *pgxpool.Pool
+	ctx           context.Context
+	cancel        context.CancelFunc
+	stock         stockv1.StockServiceClient
+	reservation   resv1.ReservationServiceClient
+	order         orderv1.OrderServiceClient
+	stockPool     *pgxpool.Pool
+	resPool       *pgxpool.Pool
+	orderPool     *pgxpool.Pool
+	sweeperPool   *pgxpool.Pool
+	resSrv        *grpc.Server
+	resListener   *bufconn.Listener
+	resSrvStopped bool
+	saga          *orderservice.Saga
+}
+
+// resumeSagas invokes ResumePendingSagas on the in-process order server.
+func (e *testEnv) resumeSagas(t *testing.T, limit int32) error {
+	t.Helper()
+	return e.saga.ResumePendingSagas(e.ctx, limit)
+}
+
+// breakReservation stops the in-process reservation server to simulate a
+// dependency outage for circuit-breaker tests.
+func (e *testEnv) breakReservation(t *testing.T) {
+	t.Helper()
+	if !e.resSrvStopped {
+		e.resSrv.Stop()
+		e.resSrvStopped = true
+	}
+}
+
+// fixReservation restarts the in-process reservation server after an outage.
+func (e *testEnv) fixReservation(t *testing.T) {
+	t.Helper()
+	if e.resSrvStopped {
+		go func() { _ = e.resSrv.Serve(e.resListener) }()
+		e.resSrvStopped = false
+	}
 }
 
 func setup(t *testing.T) *testEnv {
@@ -52,6 +82,7 @@ func setup(t *testing.T) *testEnv {
 	resPool := mustPool(t, reservationDSN)
 	orderPool := mustPool(t, orderDSN)
 	sweeperPool := mustPool(t, sweeperDSN)
+	orderSweeperPool := mustPool(t, orderSweeperDSN)
 	if err := truncate(t, stockPool, "stock_levels", "stock_events", "outbox", "processed_idempotency_keys"); err != nil {
 		t.Fatalf("truncate stock: %v", err)
 	}
@@ -78,8 +109,12 @@ func setup(t *testing.T) *testEnv {
 	}
 	t.Cleanup(func() { _ = stockConn.Close() })
 
+	orderPool2 := orderPool // keep linters happy about shadowing below
+	_ = orderPool2
+
 	resSrv := grpc.NewServer()
-	resv1.RegisterReservationServiceServer(resSrv, reservationservice.NewServer(resPool, stockv1.NewStockServiceClient(stockConn)))
+	resImpl := reservationservice.NewServer(resPool, stockv1.NewStockServiceClient(stockConn))
+	resv1.RegisterReservationServiceServer(resSrv, resImpl)
 	resLis := bufconn.Listen(1024 * 1024)
 	go func() { _ = resSrv.Serve(resLis) }()
 	t.Cleanup(resSrv.Stop)
@@ -94,13 +129,16 @@ func setup(t *testing.T) *testEnv {
 	t.Cleanup(func() { _ = resConn.Close() })
 
 	// Order service (saga) on top of reservation + stock + sandbox payment.
-	orderSrv := grpc.NewServer()
-	orderv1.RegisterOrderServiceServer(orderSrv, orderservice.NewSaga(
+	// The order sweeper pool uses the BYPASSRLS role for cross-tenant resume scans.
+	sagaImpl := orderservice.NewSaga(
 		orderPool,
+		orderSweeperPool,
 		resv1.NewReservationServiceClient(resConn),
 		stockv1.NewStockServiceClient(stockConn),
 		payment.NewSandbox(),
-	))
+	)
+	orderSrv := grpc.NewServer()
+	orderv1.RegisterOrderServiceServer(orderSrv, sagaImpl)
 	orderLis := bufconn.Listen(1024 * 1024)
 	go func() { _ = orderSrv.Serve(orderLis) }()
 	t.Cleanup(orderSrv.Stop)
@@ -124,6 +162,9 @@ func setup(t *testing.T) *testEnv {
 		resPool:     resPool,
 		orderPool:   orderPool,
 		sweeperPool: sweeperPool,
+		resSrv:      resSrv,
+		resListener: resLis,
+		saga:        sagaImpl,
 	}
 }
 
