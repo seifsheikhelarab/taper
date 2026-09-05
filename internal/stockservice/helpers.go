@@ -15,24 +15,17 @@ import (
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 )
 
+// StockLocation identifies a unique stock position (tenant + SKU + warehouse).
+type StockLocation struct {
+	TenantID    pgtype.UUID
+	SkuID       string
+	WarehouseID string
+}
+
 func payloadHash(msg proto.Message) string {
 	b, _ := proto.Marshal(msg)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
-}
-
-// applyIdempotency records an idempotency key. A duplicate key aborts with a
-// benign error so the caller returns a cached (non-mutating) response.
-func applyIdempotency(ctx context.Context, q *stockdb.Queries, tenantID pgtype.UUID, key string, msg proto.Message) error {
-	if key == "" {
-		return nil
-	}
-	_, err := q.CheckAndInsertIdempotencyKey(ctx, stockdb.CheckAndInsertIdempotencyKeyParams{
-		TenantID:       tenantID,
-		IdempotencyKey: key,
-		PayloadHash:    payloadHash(msg),
-	})
-	return err
 }
 
 // tryIdempotency reports whether the key was already processed (duplicate).
@@ -51,6 +44,15 @@ func tryIdempotency(ctx context.Context, q *stockdb.Queries, tenantID pgtype.UUI
 		return true, nil
 	}
 	return false, err
+}
+
+// stockLevelParams returns the common fields for stock level queries.
+func stockLevelParams(loc StockLocation) stockdb.GetStockLevelForUpdateParams {
+	return stockdb.GetStockLevelForUpdateParams{
+		TenantID:    loc.TenantID,
+		SkuID:       loc.SkuID,
+		WarehouseID: loc.WarehouseID,
+	}
 }
 
 // sortedLines orders lines deterministically to avoid cross-row deadlocks.
