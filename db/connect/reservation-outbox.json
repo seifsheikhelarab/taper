@@ -1,0 +1,25 @@
+{
+  "name": "reservation-outbox",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "taper_cdc",
+    "database.password": "tapercdc",
+    "database.dbname": "reservation_db",
+    "topic.prefix": "reservation",
+    "table.include.list": "public.outbox",
+    "slot.name": "reservation_outbox_slot",
+    "publication.name": "reservation_outbox_pub",
+    "publication.autocreate.mode": "filtered",
+    "tombstones.on.delete": "false",
+    "transforms": "outbox",
+    "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+    "transforms.outbox.table.field.event.key": "aggregate_id",
+    "transforms.outbox.table.field.event.id": "id",
+    "transforms.outbox.table.field.event.type": "event_type",
+    "transforms.outbox.table.field.event.payload": "payload",
+    "transforms.outbox.route.by.field": "aggregate_type",
+    "transforms.outbox.route.topic.replacement": "reservation.events"
+  }
+}
