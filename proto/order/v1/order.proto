@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package order.v1;
+
+option go_package = "github.com/seifsheikhelarab/taper/gen/go/order/v1;orderv1";
+
+// OrderService coordinates the order saga: reserve -> pay -> allocate -> confirm.
+service OrderService {
+  // CreateOrder reserves stock for all lines, then charges payment.
+  // On payment failure the reservation is compensated (released).
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+
+  // GetOrder returns the current order and saga state.
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+
+  // CancelOrder compensates an order still inside its payment window.
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
+}
+
+message OrderLine {
+  string sku_id = 1;
+  string warehouse_id = 2;
+  int32 quantity = 3;
+  int64 unit_price = 4; // minor units; order total = sum(quantity * unit_price)
+}
+
+message CreateOrderRequest {
+  string tenant_id = 1;
+  string order_id = 2; // client-supplied, idempotency anchor
+  repeated OrderLine lines = 3;
+  string idempotency_key = 4;
+  int32 ttl_seconds = 5; // optional reservation window override
+  // Test hook: sandbox payment forced to decline when true.
+  bool force_payment_failure = 6;
+}
+
+message CreateOrderResponse {
+  string order_id = 1;
+  string status = 2; // CONFIRMED | COMPENSATED | FAILED
+  int64 total_amount = 3;
+  string transaction_id = 4; // payment reference when confirmed
+}
+
+message GetOrderRequest {
+  string tenant_id = 1;
+  string order_id = 2;
+}
+
+message GetOrderResponse {
+  string order_id = 1;
+  string status = 2;
+  int64 total_amount = 3;
+  repeated OrderLine lines = 4;
+  string saga_state = 5;
+  string transaction_id = 6;
+  int64 created_at_unix = 7;
+}
+
+message CancelOrderRequest {
+  string tenant_id = 1;
+  string order_id = 2;
+  string reason = 3;
+  string idempotency_key = 4;
+}
+
+message CancelOrderResponse {
+  bool success = 1;
+  string status = 2;
+}

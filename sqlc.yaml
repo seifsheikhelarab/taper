@@ -16,3 +16,11 @@ sql:
         package: "reservation"
         out: "gen/go/db/reservation"
         sql_package: "pgx/v5"
+  - engine: "postgresql"
+    schema: "db/migrations/order"
+    queries: "db/queries/order.sql"
+    gen:
+      go:
+        package: "order"
+        out: "gen/go/db/order"
+        sql_package: "pgx/v5"
