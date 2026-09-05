@@ -38,6 +38,29 @@ func SetTenantRLS(ctx context.Context, tx pgx.Tx, tenantID string) error {
 	return nil
 }
 
+// ExecTxNoTenant runs a transaction without setting the RLS tenant scope.
+// Only for cross-tenant maintenance paths (sweepers, resume workers) that run
+// as a privileged role; RLS still applies to normal request traffic.
+func ExecTxNoTenant(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if err := fn(tx); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
 // ExecTxWithTenant executes callback function within a PostgreSQL transaction with tenant RLS set.
 func ExecTxWithTenant(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) error {
 	tenantID, err := TenantIDFromContext(ctx)
