@@ -13,16 +13,20 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
+	orderv1 "github.com/seifsheikhelarab/taper/gen/go/order/v1"
 	resv1 "github.com/seifsheikhelarab/taper/gen/go/reservation/v1"
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
+	"github.com/seifsheikhelarab/taper/internal/orderservice"
 	"github.com/seifsheikhelarab/taper/internal/reservationservice"
 	"github.com/seifsheikhelarab/taper/internal/stockservice"
 	"github.com/seifsheikhelarab/taper/pkg/database"
+	"github.com/seifsheikhelarab/taper/pkg/payment"
 )
 
 const (
 	stockDSN       = "postgres://taper_app:taperapp@localhost:5432/taper_db"
 	reservationDSN = "postgres://taper_app:taperapp@localhost:5432/reservation_db"
+	orderDSN       = "postgres://taper_app:taperapp@localhost:5432/order_db"
 	sweeperDSN     = "postgres://taper_sweeper:tapersweeper@localhost:5432/reservation_db"
 	tenantA        = "11111111-1111-1111-1111-111111111111"
 	tenantB        = "22222222-2222-2222-2222-222222222222"
@@ -33,8 +37,10 @@ type testEnv struct {
 	cancel      context.CancelFunc
 	stock       stockv1.StockServiceClient
 	reservation resv1.ReservationServiceClient
+	order       orderv1.OrderServiceClient
 	stockPool   *pgxpool.Pool
 	resPool     *pgxpool.Pool
+	orderPool   *pgxpool.Pool
 	sweeperPool *pgxpool.Pool
 }
 
@@ -44,12 +50,16 @@ func setup(t *testing.T) *testEnv {
 
 	stockPool := mustPool(t, stockDSN)
 	resPool := mustPool(t, reservationDSN)
+	orderPool := mustPool(t, orderDSN)
 	sweeperPool := mustPool(t, sweeperDSN)
 	if err := truncate(t, stockPool, "stock_levels", "stock_events", "outbox", "processed_idempotency_keys"); err != nil {
 		t.Fatalf("truncate stock: %v", err)
 	}
 	if err := truncate(t, resPool, "reservations", "outbox", "processed_idempotency_keys"); err != nil {
 		t.Fatalf("truncate reservation: %v", err)
+	}
+	if err := truncate(t, orderPool, "orders", "saga_instances", "order_lines", "outbox", "processed_idempotency_keys"); err != nil {
+		t.Fatalf("truncate order: %v", err)
 	}
 
 	stockSrv := grpc.NewServer()
@@ -83,13 +93,36 @@ func setup(t *testing.T) *testEnv {
 	}
 	t.Cleanup(func() { _ = resConn.Close() })
 
+	// Order service (saga) on top of reservation + stock + sandbox payment.
+	orderSrv := grpc.NewServer()
+	orderv1.RegisterOrderServiceServer(orderSrv, orderservice.NewSaga(
+		orderPool,
+		resv1.NewReservationServiceClient(resConn),
+		stockv1.NewStockServiceClient(stockConn),
+		payment.NewSandbox(),
+	))
+	orderLis := bufconn.Listen(1024 * 1024)
+	go func() { _ = orderSrv.Serve(orderLis) }()
+	t.Cleanup(orderSrv.Stop)
+
+	orderConn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return orderLis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial order: %v", err)
+	}
+	t.Cleanup(func() { _ = orderConn.Close() })
+
 	return &testEnv{
 		ctx:         ctx,
 		cancel:      cancel,
 		stock:       stockv1.NewStockServiceClient(stockConn),
 		reservation: resv1.NewReservationServiceClient(resConn),
+		order:       orderv1.NewOrderServiceClient(orderConn),
 		stockPool:   stockPool,
 		resPool:     resPool,
+		orderPool:   orderPool,
 		sweeperPool: sweeperPool,
 	}
 }

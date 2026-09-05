@@ -11,6 +11,7 @@ import (
 
 	orderv1 "github.com/seifsheikhelarab/taper/gen/go/order/v1"
 	resv1 "github.com/seifsheikhelarab/taper/gen/go/reservation/v1"
+	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 	"github.com/seifsheikhelarab/taper/internal/orderservice"
 	"github.com/seifsheikhelarab/taper/pkg/config"
 	"github.com/seifsheikhelarab/taper/pkg/payment"
@@ -20,6 +21,7 @@ func main() {
 	addr := config.EnvOr("ORDER_ADDR", ":50053")
 	dsn := config.EnvOr("ORDER_DATABASE_URL", "postgres://taper_app:taperapp@localhost:5432/order_db")
 	resAddr := config.EnvOr("RESERVATION_ADDR", "localhost:50052")
+	stockAddr := config.EnvOr("STOCK_ADDR", "localhost:50051")
 
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
@@ -33,6 +35,12 @@ func main() {
 	}
 	defer resConn.Close()
 
+	stockConn, err := grpc.NewClient(stockAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("dial stock: %v", err)
+	}
+	defer stockConn.Close()
+
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("listen: %v", err)
@@ -42,6 +50,7 @@ func main() {
 	orderv1.RegisterOrderServiceServer(srv, orderservice.NewSaga(
 		pool,
 		resv1.NewReservationServiceClient(resConn),
+		stockv1.NewStockServiceClient(stockConn),
 		payment.NewSandbox(),
 	))
 	log.Printf("order service listening on %s", addr)

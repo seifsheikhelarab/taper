@@ -16,6 +16,7 @@ import (
 	orderdb "github.com/seifsheikhelarab/taper/gen/go/db/order"
 	orderv1 "github.com/seifsheikhelarab/taper/gen/go/order/v1"
 	resv1 "github.com/seifsheikhelarab/taper/gen/go/reservation/v1"
+	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 	"github.com/seifsheikhelarab/taper/pkg/circuitbreaker"
 	"github.com/seifsheikhelarab/taper/pkg/database"
 	"github.com/seifsheikhelarab/taper/pkg/payment"
@@ -32,6 +33,7 @@ type Saga struct {
 	orderv1.UnimplementedOrderServiceServer
 	pool         *pgxpool.Pool
 	reservations resv1.ReservationServiceClient
+	stock        stockv1.StockServiceClient
 	gateway      payment.Gateway
 	defaultTTL   time.Duration
 	// Fail-Fast Policy: fail immediately when downstream deps are down.
@@ -39,10 +41,11 @@ type Saga struct {
 	payBreaker *circuitbreaker.Breaker
 }
 
-func NewSaga(pool *pgxpool.Pool, res resv1.ReservationServiceClient, gw payment.Gateway) *Saga {
+func NewSaga(pool *pgxpool.Pool, res resv1.ReservationServiceClient, stock stockv1.StockServiceClient, gw payment.Gateway) *Saga {
 	return &Saga{
 		pool:         pool,
 		reservations: res,
+		stock:        stock,
 		gateway:      gw,
 		defaultTTL:   15 * time.Minute,
 		resBreaker:   circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: 10 * time.Second}),
@@ -170,14 +173,26 @@ func (s *Saga) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest)
 		_ = s.failSaga(ctx, req.GetTenantId(), req.GetOrderId(), "allocate: "+err.Error())
 		return nil, status.Errorf(codes.Internal, "allocate: %v", err)
 	}
+	// Transition the stock-level rows reserved -> allocated (US5: post-payment
+	// inventory must not sit in reserved where the sweeper could release it).
+	if _, err := s.stock.ConfirmStockAllocation(ctx, &stockv1.ConfirmStockAllocationRequest{
+		TenantId:       req.GetTenantId(),
+		OrderId:        req.GetOrderId(),
+		IdempotencyKey: req.GetIdempotencyKey() + ":confirm",
+		Lines:          stockLines(req.GetLines()),
+	}); err != nil {
+		_ = s.failSaga(ctx, req.GetTenantId(), req.GetOrderId(), "confirm: "+err.Error())
+		return nil, status.Errorf(codes.Internal, "confirm: %v", err)
+	}
 	if err := s.transition(ctx, tenantUUID, req.GetOrderId(), SagaConfirmed, 3, ""); err != nil {
 		return nil, status.Errorf(codes.Internal, "saga transition: %v", err)
 	}
 
 	return &orderv1.CreateOrderResponse{
-		OrderId:     req.GetOrderId(),
-		Status:      SagaConfirmed,
-		TotalAmount: total,
+		OrderId:       req.GetOrderId(),
+		Status:        SagaConfirmed,
+		TotalAmount:   total,
+		TransactionId: txnID,
 	}, nil
 }
 
@@ -455,6 +470,18 @@ func reserveItems(lines []*orderv1.OrderLine) []*resv1.ReservationItem {
 		})
 	}
 	return items
+}
+
+func stockLines(lines []*orderv1.OrderLine) []*stockv1.StockLine {
+	out := make([]*stockv1.StockLine, 0, len(lines))
+	for _, l := range lines {
+		out = append(out, &stockv1.StockLine{
+			SkuId:       l.GetSkuId(),
+			WarehouseId: l.GetWarehouseId(),
+			Quantity:    l.GetQuantity(),
+		})
+	}
+	return out
 }
 
 func reasonOrDefault(r, def string) string {
