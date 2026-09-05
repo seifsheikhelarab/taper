@@ -14,6 +14,7 @@ import (
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 	"github.com/seifsheikhelarab/taper/internal/orderservice"
 	"github.com/seifsheikhelarab/taper/pkg/config"
+	"github.com/seifsheikhelarab/taper/pkg/outboxprune"
 	"github.com/seifsheikhelarab/taper/pkg/payment"
 )
 
@@ -52,6 +53,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+
+	// ADR-0002: batched outbox retention via the BYPASSRLS sweeper pool
+	// (off unless OUTBOX_PRUNE_ENABLED).
+	outboxprune.StartFromEnv(context.Background(), sweeperPool, log.Printf)
 
 	srv := grpc.NewServer()
 	orderv1.RegisterOrderServiceServer(srv, orderservice.NewSaga(

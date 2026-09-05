@@ -98,7 +98,7 @@ func (s *Sweeper) markExpired(ctx context.Context, r resdb.Reservation) {
 	_, err = resdb.New(s.pool).InsertOutboxEvent(ctx, resdb.InsertOutboxEventParams{
 		TenantID:      r.TenantID,
 		AggregateType: "reservation",
-		AggregateID:   r.OrderID,
+		AggregateID:   partitionKey(r.TenantID, r.OrderID),
 		EventType:     "reservation.expired",
 		Payload:       []byte(`{"order_id":"` + r.OrderID + `","sku_id":"` + r.SkuID + `"}`),
 	})

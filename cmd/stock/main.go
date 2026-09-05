@@ -11,6 +11,7 @@ import (
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 	"github.com/seifsheikhelarab/taper/internal/stockservice"
 	"github.com/seifsheikhelarab/taper/pkg/config"
+	"github.com/seifsheikhelarab/taper/pkg/outboxprune"
 )
 
 func main() {
@@ -28,6 +29,9 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 
+	// ADR-0002: batched outbox retention (off unless OUTBOX_PRUNE_ENABLED).
+	outboxprune.StartFromEnv(context.Background(), pool, log.Printf)
+
 	srv := grpc.NewServer()
 	stockv1.RegisterStockServiceServer(srv, stockservice.NewServer(pool))
 	log.Printf("stock service listening on %s", addr)
@@ -35,4 +39,3 @@ func main() {
 		log.Fatalf("serve: %v", err)
 	}
 }
-

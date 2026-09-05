@@ -149,7 +149,7 @@ func (s *Server) insertReservations(ctx context.Context, tenantUUID pgtype.UUID,
 			if _, err := q.InsertOutboxEvent(ctx, resdb.InsertOutboxEventParams{
 				TenantID:      tenantUUID,
 				AggregateType: "reservation",
-				AggregateID:   req.GetOrderId(),
+				AggregateID:   partitionKey(tenantUUID, req.GetOrderId()),
 				EventType:     "reservation.created",
 				Payload:       []byte(`{"order_id":"` + req.GetOrderId() + `","sku_id":"` + it.GetSkuId() + `"}`),
 			}); err != nil {
@@ -226,7 +226,7 @@ func (s *Server) Release(ctx context.Context, req *resv1.ReleaseRequest) (*resv1
 			if _, err := q.InsertOutboxEvent(ctx, resdb.InsertOutboxEventParams{
 				TenantID:      tenantUUID,
 				AggregateType: "reservation",
-				AggregateID:   req.GetOrderId(),
+				AggregateID:   partitionKey(tenantUUID, req.GetOrderId()),
 				EventType:     "reservation.released",
 				Payload:       []byte(`{"order_id":"` + req.GetOrderId() + `"}`),
 			}); err != nil {
@@ -289,7 +289,7 @@ func (s *Server) AllocateReservation(ctx context.Context, req *resv1.AllocateRes
 			if _, err := q.InsertOutboxEvent(ctx, resdb.InsertOutboxEventParams{
 				TenantID:      tenantUUID,
 				AggregateType: "reservation",
-				AggregateID:   req.GetOrderId(),
+				AggregateID:   partitionKey(tenantUUID, req.GetOrderId()),
 				EventType:     "reservation.allocated",
 				Payload:       []byte(`{"order_id":"` + req.GetOrderId() + `"}`),
 			}); err != nil {
