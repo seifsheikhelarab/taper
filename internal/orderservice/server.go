@@ -16,6 +16,7 @@ import (
 	orderdb "github.com/seifsheikhelarab/taper/gen/go/db/order"
 	orderv1 "github.com/seifsheikhelarab/taper/gen/go/order/v1"
 	resv1 "github.com/seifsheikhelarab/taper/gen/go/reservation/v1"
+	"github.com/seifsheikhelarab/taper/pkg/circuitbreaker"
 	"github.com/seifsheikhelarab/taper/pkg/database"
 	"github.com/seifsheikhelarab/taper/pkg/payment"
 )
@@ -33,6 +34,9 @@ type Saga struct {
 	reservations resv1.ReservationServiceClient
 	gateway      payment.Gateway
 	defaultTTL   time.Duration
+	// Fail-Fast Policy: fail immediately when downstream deps are down.
+	resBreaker *circuitbreaker.Breaker
+	payBreaker *circuitbreaker.Breaker
 }
 
 func NewSaga(pool *pgxpool.Pool, res resv1.ReservationServiceClient, gw payment.Gateway) *Saga {
@@ -41,6 +45,8 @@ func NewSaga(pool *pgxpool.Pool, res resv1.ReservationServiceClient, gw payment.
 		reservations: res,
 		gateway:      gw,
 		defaultTTL:   15 * time.Minute,
+		resBreaker:   circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: 10 * time.Second}),
+		payBreaker:   circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: 10 * time.Second}),
 	}
 }
 
@@ -80,6 +86,10 @@ func (s *Saga) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest)
 	}
 
 	// Step 1: Reserve (all-or-nothing via reservation service).
+	// Fail-Fast Policy: fail immediately when the breaker is open.
+	if err := s.resBreaker.Allow(); err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
 	resResp, err := s.reservations.Reserve(ctx, &resv1.ReserveRequest{
 		TenantId:       req.GetTenantId(),
 		OrderId:        req.GetOrderId(),
@@ -88,9 +98,11 @@ func (s *Saga) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest)
 		Items:          reserveItems(req.GetLines()),
 	})
 	if err != nil {
+		s.resBreaker.RecordFailure()
 		_ = s.failSaga(ctx, req.GetTenantId(), req.GetOrderId(), "reserve: "+err.Error())
 		return nil, status.Errorf(codes.Internal, "reserve: %v", err)
 	}
+	s.resBreaker.RecordSuccess()
 	if !resResp.GetSuccess() {
 		_ = s.failSaga(ctx, req.GetTenantId(), req.GetOrderId(), "insufficient stock")
 		return &orderv1.CreateOrderResponse{
@@ -108,6 +120,9 @@ func (s *Saga) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest)
 	if req.GetForcePaymentFailure() {
 		chargeErr = payment.ErrPaymentDeclined
 	} else {
+		if err := s.payBreaker.Allow(); err != nil {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
 		res, cerr := s.gateway.Charge(ctx, payment.ChargeRequest{
 			OrderID:  req.GetOrderId(),
 			TenantID: req.GetTenantId(),
@@ -119,6 +134,13 @@ func (s *Saga) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest)
 			txnID = res.TransactionID
 		}
 		chargeErr = cerr
+		// A declined payment is a business outcome, not a dependency failure:
+		// only infrastructure errors trip the breaker.
+		if chargeErr != nil && !errors.Is(chargeErr, payment.ErrPaymentDeclined) {
+			s.payBreaker.RecordFailure()
+		} else {
+			s.payBreaker.RecordSuccess()
+		}
 	}
 	if chargeErr != nil {
 		// Compensate: release the held stock, mark compensated.
