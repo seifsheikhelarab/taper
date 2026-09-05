@@ -32,6 +32,7 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	ctx = database.WithTenantID(ctx, req.GetTenantId())
+	loc := StockLocation{TenantID: tenantUUID, SkuID: req.GetSkuId(), WarehouseID: req.GetWarehouseId()}
 
 	var resp *stockv1.AdjustStockResponse
 	err = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {
@@ -42,12 +43,7 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 			return err
 		}
 		if dup {
-			// Idempotent replay: return cached response.
-			level, err := q.GetStockLevelForUpdate(ctx, stockdb.GetStockLevelForUpdateParams{
-				TenantID:    tenantUUID,
-				SkuID:       req.GetSkuId(),
-				WarehouseID: req.GetWarehouseId(),
-			})
+			level, err := q.GetStockLevelForUpdate(ctx, stockLevelParams(loc))
 			if err != nil {
 				return err
 			}
@@ -70,11 +66,7 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 			return err
 		}
 
-		level, err := q.GetStockLevelForUpdate(ctx, stockdb.GetStockLevelForUpdateParams{
-			TenantID:    tenantUUID,
-			SkuID:       req.GetSkuId(),
-			WarehouseID: req.GetWarehouseId(),
-		})
+		level, err := q.GetStockLevelForUpdate(ctx, stockLevelParams(loc))
 		if err != nil {
 			return err
 		}
@@ -114,9 +106,10 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 
 		payload, _ := marshalAdjustEvent(req)
 		_, err = q.InsertOutboxEvent(ctx, stockdb.InsertOutboxEventParams{
-			TenantID:      tenantUUID,				AggregateType: "stock",
-				AggregateID:   tenantUUID.String() + ":" + req.GetSkuId(),
-				EventType:     "stock.adjusted",
+			TenantID:      tenantUUID,
+			AggregateType: "stock",
+			AggregateID:   tenantUUID.String() + ":" + req.GetSkuId(),
+			EventType:     "stock.adjusted",
 			Payload:       payload,
 		})
 		if err != nil {
@@ -180,18 +173,14 @@ func (s *Server) ReserveStock(ctx context.Context, req *stockv1.ReserveStockRequ
 			return err
 		}
 		if dup {
-			// Idempotent replay of an already-committed reservation.
 			resp = &stockv1.ReserveStockResponse{Success: true}
 			return nil
 		}
 
 		var failed []string
 		for _, l := range lines {
-			level, err := q.GetStockLevelForUpdate(ctx, stockdb.GetStockLevelForUpdateParams{
-				TenantID:    tenantUUID,
-				SkuID:       l.SkuId,
-				WarehouseID: l.WarehouseId,
-			})
+			loc := StockLocation{TenantID: tenantUUID, SkuID: l.SkuId, WarehouseID: l.WarehouseId}
+			level, err := q.GetStockLevelForUpdate(ctx, stockLevelParams(loc))
 			if err == pgx.ErrNoRows || (err == nil && (level.IsLockedForAudit || level.AvailableQty < l.Quantity)) {
 				failed = append(failed, l.SkuId)
 				continue
@@ -234,7 +223,6 @@ func (s *Server) ReserveStock(ctx context.Context, req *stockv1.ReserveStockRequ
 		}
 
 		if len(failed) > 0 {
-			// Abort: all-or-nothing. Returning an error rolls back the whole tx.
 			resp = &stockv1.ReserveStockResponse{Success: false, FailedSkuIds: failed}
 			return errors.New("insufficient stock for reservation")
 		}
@@ -267,17 +255,13 @@ func (s *Server) ReleaseStock(ctx context.Context, req *stockv1.ReleaseStockRequ
 			return err
 		}
 		if dup {
-			// Idempotent replay: return cached success.
 			resp = &stockv1.ReleaseStockResponse{Success: true}
 			return nil
 		}
 		var released []string
 		for _, l := range lines {
-			level, err := q.GetStockLevelForUpdate(ctx, stockdb.GetStockLevelForUpdateParams{
-				TenantID:    tenantUUID,
-				SkuID:       l.SkuId,
-				WarehouseID: l.WarehouseId,
-			})
+			loc := StockLocation{TenantID: tenantUUID, SkuID: l.SkuId, WarehouseID: l.WarehouseId}
+			level, err := q.GetStockLevelForUpdate(ctx, stockLevelParams(loc))
 			if err == pgx.ErrNoRows {
 				continue
 			}
@@ -344,17 +328,13 @@ func (s *Server) ConfirmStockAllocation(ctx context.Context, req *stockv1.Confir
 			return err
 		}
 		if dup {
-			// Idempotent replay: return cached success.
 			resp = &stockv1.ConfirmStockAllocationResponse{Success: true}
 			return nil
 		}
 		var out []*stockv1.StockAllocationLine
 		for _, l := range lines {
-			level, err := q.GetStockLevelForUpdate(ctx, stockdb.GetStockLevelForUpdateParams{
-				TenantID:    tenantUUID,
-				SkuID:       l.SkuId,
-				WarehouseID: l.WarehouseId,
-			})
+			loc := StockLocation{TenantID: tenantUUID, SkuID: l.SkuId, WarehouseID: l.WarehouseId}
+			level, err := q.GetStockLevelForUpdate(ctx, stockLevelParams(loc))
 			if err != nil {
 				return err
 			}
@@ -401,15 +381,12 @@ func (s *Server) UnlockStockForAudit(ctx context.Context, req *stockv1.UnlockSto
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	ctx = database.WithTenantID(ctx, req.GetTenantId())
+	loc := StockLocation{TenantID: tenantUUID, SkuID: req.GetSkuId(), WarehouseID: req.GetWarehouseId()}
 
 	var resp *stockv1.UnlockStockForAuditResponse
 	err = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {
 		q := stockdb.New(tx)
-		_, err := q.GetStockLevelForUpdate(ctx, stockdb.GetStockLevelForUpdateParams{
-			TenantID:    tenantUUID,
-			SkuID:       req.GetSkuId(),
-			WarehouseID: req.GetWarehouseId(),
-		})
+		_, err := q.GetStockLevelForUpdate(ctx, stockLevelParams(loc))
 		if err == pgx.ErrNoRows {
 			resp = &stockv1.UnlockStockForAuditResponse{Success: false, IsUnlocked: false}
 			return nil
