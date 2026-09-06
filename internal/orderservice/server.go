@@ -430,7 +430,7 @@ func (s *Saga) FulfillOrder(ctx context.Context, req *orderv1.FulfillOrderReques
 				// Same key as a committed fulfillment: no-op success.
 				resp = &orderv1.FulfillOrderResponse{Success: true, Status: OrderFulfilled}
 				return nil
-			} else if err != nil {
+			} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
 		}

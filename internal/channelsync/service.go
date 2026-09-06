@@ -96,6 +96,8 @@ func (s *Service) handleAdjusted(ctx context.Context, eventID, tenant, sku strin
 	if err != nil {
 		return fmt.Errorf("tenant id: %w", err)
 	}
+	// The event carries the tenant; RLS-scoped writes need it in context.
+	ctx = database.WithTenantID(ctx, tenant)
 	// Push first, then commit the projection/idempotency row: a crash
 	// between the two replays the event, and the idempotent upsert makes
 	// the re-push harmless.
@@ -148,6 +150,7 @@ func (s *Service) handleDeficit(ctx context.Context, eventID, tenant, sku string
 	if err != nil {
 		return fmt.Errorf("tenant id: %w", err)
 	}
+	ctx = database.WithTenantID(ctx, tenant)
 	if err := s.notifier.NotifyDeficit(ctx, channel.DeficitAlert{
 		TenantID:    tenant,
 		SKUID:       sku,

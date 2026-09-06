@@ -232,9 +232,12 @@ func TestKafkaDLQEnvelope(t *testing.T) {
 	topic := "stock.events"
 	dlq := topic + ".dlq"
 
-	// Publish a probe message directly so the test is self-contained.
+	// Publish a probe message directly so the test is self-contained. Key and
+	// error are unique per run: the DLQ retains earlier runs' envelopes and a
+	// shared needle would match those instead of this run's message.
+	runID := time.Now().UnixNano()
 	w := &kafka.Writer{Addr: kafka.TCP(brokers...), Topic: topic, Balancer: &kafka.Hash{}}
-	probeKey := []byte("dlq-probe-key")
+	probeKey := []byte(fmt.Sprintf("dlq-probe-%d", runID))
 	probeVal := []byte(`{"poison":true}`)
 	if err := w.WriteMessages(context.Background(), kafka.Message{Key: probeKey, Value: probeVal}); err != nil {
 		t.Fatalf("seed probe: %v", err)
@@ -252,15 +255,15 @@ func TestKafkaDLQEnvelope(t *testing.T) {
 		_ = c.Run(runCtx, func(ctx context.Context, m kafka.Message) error {
 			// Only poison the probe key; anything else succeeds so offsets move.
 			if string(m.Key) == string(probeKey) {
-				return fmt.Errorf("poison handler")
+				return fmt.Errorf("poison-%d", runID)
 			}
 			return nil
 		})
 		close(done)
 	}()
 
-	// Wait for the DLQ message.
-	envMsg := waitForMessage(t, brokers, dlq, "poison", 90*time.Second)
+	// Wait for this run's DLQ message.
+	envMsg := waitForMessage(t, brokers, dlq, fmt.Sprintf("poison-%d", runID), 90*time.Second)
 	cancel()
 	<-done
 	_ = c.Close()

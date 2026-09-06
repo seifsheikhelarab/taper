@@ -75,21 +75,37 @@ func ephemeralGroup(g string) string {
 // consumer group (group-less readers receive no data on this broker).
 func readAll(ctx context.Context, brokers []string, topic, group string) []kafka.Message {
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:     brokers,
-		Topic:       topic,
-		GroupID:     group,
-		MinBytes:    1,
-		MaxBytes:    10e6,
-		StartOffset: kafka.FirstOffset,
+		Brokers:  brokers,
+		Topic:    topic,
+		GroupID:  group,
+		MinBytes: 1,
+		MaxBytes: 10e6,
+		MaxWait:  500 * time.Millisecond,
 	})
 	defer r.Close()
 	var msgs []kafka.Message
+	var lastErr error
+	idle := 0
 	for {
-		m, err := r.FetchMessage(ctx)
+		fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		m, err := r.FetchMessage(fetchCtx)
+		cancel()
 		if err != nil {
-			break
+			if ctx.Err() != nil {
+				break // parent cancelled/expired
+			}
+			lastErr = err
+			idle++
+			if idle >= 3 {
+				fmt.Fprintf(os.Stderr, "stopping after repeated fetch errors: %v\n", lastErr)
+				break
+			}
+			continue
 		}
+		idle = 0
 		msgs = append(msgs, m)
+		// Commit so a drained DLQ is not re-read by the same run.
+		_ = r.CommitMessages(context.Background(), m)
 	}
 	return msgs
 }
