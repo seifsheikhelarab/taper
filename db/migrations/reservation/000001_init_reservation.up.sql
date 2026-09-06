@@ -34,6 +34,14 @@ CREATE OR REPLACE FUNCTION app_current_tenant() RETURNS UUID LANGUAGE sql STABLE
 $$ SELECT NULLIF(current_setting('app.current_tenant_id', true), '')::uuid $$;
 
 ALTER TABLE reservations ENABLE ROW LEVEL SECURITY;
+-- Service and cross-tenant maintenance access (other service migrations
+-- grant these; reservation_db was missing them, so taper_app had zero
+-- privileges on a fresh volume).
+GRANT ALL ON ALL TABLES IN SCHEMA public TO taper_app;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO taper_app;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO taper_sweeper;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO taper_sweeper;
+
 CREATE POLICY reservations_tenant_isolation_policy ON reservations
     USING (tenant_id = app_current_tenant());
 

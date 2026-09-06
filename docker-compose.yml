@@ -73,6 +73,17 @@ services:
         create_compacted connect_configs 1
         create_compacted connect_offsets 1
         create_compacted connect_statuses 1
+        create_topics() {
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$B --create --if-not-exists \
+            --topic "$$1" --partitions 6 --replication-factor 1 >/dev/null
+          echo "event topic ready: $$1"
+        }
+        create_topics stock.events
+        create_topics stock.events.dlq
+        create_topics reservation.events
+        create_topics reservation.events.dlq
+        create_topics order.events
+        create_topics order.events.dlq
 
   connect:
     image: quay.io/debezium/connect:2.7
