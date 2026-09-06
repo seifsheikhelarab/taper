@@ -6,12 +6,15 @@
 // Event derivation contract (reason -> bucket effect):
 //
 //	reason "adjust", "external" ...  -> available += delta
-//	reason "reserve"                 -> reserved += -delta (delta is -qty)
-//	reason "release"                 -> reserved += -delta (delta is +qty on release)
+//	reason "reserve"                 -> available += delta (=-qty), reserved += -delta
+//	reason "release"                 -> available += delta (=+qty), reserved += -delta
 //	reason "allocate" (marker)       -> reserved += -delta, allocated += delta
 //	reason "fulfill" (marker)        -> allocated += -delta
 //
-// Zero-delta rows (e.g. RECONCILIATION_CORRECTION unlocks) affect nothing.
+// Reserve/release move goods between sellable stock and the reservation
+// bucket, so they affect available AND reserved. Markers (allocate/fulfill)
+// never touch available. Zero-delta rows (e.g. RECONCILIATION_CORRECTION
+// unlocks) affect nothing.
 package stockservice
 
 import (
@@ -118,13 +121,14 @@ func (w *Worker) Reconcile(ctx context.Context) ([]Drift, error) {
 		var avail, reserved, allocated int64
 		for _, r := range reasons {
 			switch r.Reason {
-			case "reserve", "release", "allocate":
+			case "allocate":
 				reserved -= r.TotalDelta
-				if r.Reason == "allocate" {
-					allocated += r.TotalDelta
-				}
+				allocated += r.TotalDelta
 			case "fulfill":
 				allocated -= r.TotalDelta
+			case "reserve", "release":
+				reserved -= r.TotalDelta
+				avail += r.TotalDelta
 			default:
 				avail += r.TotalDelta
 			}

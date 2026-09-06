@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -328,6 +330,185 @@ func waitKey(t *testing.T, brokers []string, topic, key string, timeout time.Dur
 	}
 	t.Fatalf("no message with key %q arrived on %s within %v", key, topic, timeout)
 	return kafka.Message{}
+}
+
+// TestStressReservationsAndFulfillment hammers one hot SKU with concurrent
+// saga reservations, concurrent fulfillments (plus duplicate replays racing
+// the originals), and concurrent reserve attempts on drained stock, then
+// asserts the conservation invariants and that reconciliation still derives
+// every bucket exactly (no drift) after the mixed concurrent traffic.
+func TestStressReservationsAndFulfillment(t *testing.T) {
+	e := setup(t)
+
+	const (
+		sku        = "stress-hot-sku"
+		wh         = "wh-stress"
+		initial    = 100
+		orders     = 100
+		fulfilN    = 60
+		replays    = 30
+		drainedTry = 40
+	)
+	e.seed(t, tenantA, sku, wh, initial)
+
+	start := make(chan struct{})
+	start2 := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Unique order prefix per run: the topic retains earlier runs' fulfilled
+	// events and the consumer filter must only match this run's orders.
+	runID := time.Now().UnixNano()
+	orderPrefix := fmt.Sprintf("stress-ord-%d-", runID)
+
+	// Phase 1: orders concurrent saga CreateOrders, each reserving 1 unit.
+	confirmed := make([]bool, orders)
+	for i := 0; i < orders; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			cr, err := e.order.CreateOrder(context.Background(), &orderv1.CreateOrderRequest{
+				TenantId: tenantA, OrderId: fmt.Sprintf("%s%d", orderPrefix, i),
+				IdempotencyKey: fmt.Sprintf("stress-key-%d-%d", runID, i),
+				Lines:          []*orderv1.OrderLine{{SkuId: sku, WarehouseId: wh, Quantity: 1, UnitPrice: 100}},
+			})
+			if err == nil && cr.GetStatus() == "CONFIRMED" {
+				confirmed[i] = true
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	confirmedCount := 0
+	for _, c := range confirmed {
+		if c {
+			confirmedCount++
+		}
+	}
+	if confirmedCount != orders {
+		t.Fatalf("confirmed %d/%d orders", confirmedCount, orders)
+	}
+	// Confirmed orders hold stock in the ALLOCATED bucket (the saga's
+	// allocate step moves reserved -> allocated; fulfillment clears it).
+	avail, reserved, allocated := e.stockLevel(t, tenantA, sku, wh)
+	if avail != 0 || reserved != 0 || allocated != orders {
+		t.Fatalf("after reserve phase: avail=%d reserved=%d allocated=%d, want 0/0/%d", avail, reserved, allocated, orders)
+	}
+
+	// Phase 2: fulfil orders concurrently; replays of the same orders race
+	// them; concurrent reserve attempts on the now-drained stock must all
+	// fail (fulfilled stock never returns to available). The real fulfillment
+	// consumer runs against the live topic: FulfillStock happens through the
+	// event stream, not in-process.
+	var fulfillOK int64
+	var drainedConfirmed int64
+	var consumerFulfilled int64
+	brokers := kafkaBrokers(t)
+	stressSvc := fulfillment.New(e.stock, nil)
+	fc := streaming.NewConsumer(streaming.Config{
+		Brokers: brokers, Topic: "order.events", GroupID: fmt.Sprintf("stress-fulfill-%d", time.Now().UnixNano()),
+	}, nil)
+	fctx, fcancel := context.WithCancel(context.Background())
+	fdone := make(chan struct{})
+	go func() {
+		defer close(fdone)
+		_ = fc.Run(fctx, func(ctx context.Context, m kafka.Message) error {
+			var ev struct {
+				EventType string `json:"event_type"`
+				OrderID   string `json:"order_id"`
+			}
+			if json.Unmarshal(m.Value, &ev) != nil || ev.EventType != "order.fulfilled" || !strings.HasPrefix(ev.OrderID, orderPrefix) {
+				return nil // not a stress fulfillment: ignore (offsets still move)
+			}
+			if err := stressSvc.HandleOrderEvent(ctx, m); err != nil {
+				return err
+			}
+			atomic.AddInt64(&consumerFulfilled, 1)
+			return nil
+		})
+	}()
+	for i := 0; i < fulfilN+replays; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start2
+			orderIdx := i % fulfilN // replays reuse the first fulfilN orders
+			resp, err := e.order.FulfillOrder(context.Background(), &orderv1.FulfillOrderRequest{
+				TenantId: tenantA, OrderId: fmt.Sprintf("%s%d", orderPrefix, orderIdx),
+				IdempotencyKey: fmt.Sprintf("stress-fulfill-%d-%d", runID, orderIdx),
+			})
+			if err == nil && resp.GetSuccess() {
+				atomic.AddInt64(&fulfillOK, 1)
+			}
+		}(i)
+	}
+	for i := 0; i < drainedTry; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start2
+			cr, err := e.order.CreateOrder(context.Background(), &orderv1.CreateOrderRequest{
+				TenantId: tenantA, OrderId: fmt.Sprintf("stress-drained-%d", i),
+				IdempotencyKey: fmt.Sprintf("stress-drained-key-%d", i),
+				Lines:          []*orderv1.OrderLine{{SkuId: sku, WarehouseId: wh, Quantity: 1, UnitPrice: 100}},
+			})
+			if err == nil && cr.GetStatus() == "CONFIRMED" {
+				atomic.AddInt64(&drainedConfirmed, 1)
+			}
+		}(i)
+	}
+	close(start2)
+	wg.Wait()
+
+	if drainedConfirmed != 0 {
+		fcancel()
+		<-fdone
+		t.Fatalf("%d reserve attempts on drained stock were confirmed (oversell!)", drainedConfirmed)
+	}
+	if fulfillOK < fulfilN {
+		fcancel()
+		<-fdone
+		t.Fatalf("only %d fulfillment calls succeeded, want >= %d (one per order incl. replays)", fulfillOK, fulfilN)
+	}
+
+	// Wait for the consumer to drive FulfillStock for every stress order
+	// (each order yields exactly one fulfilled event; replays are no-ops at
+	// the stock service).
+	waitDeadline := time.Now().Add(90 * time.Second)
+	for consumerFulfilled < int64(fulfilN) && time.Now().Before(waitDeadline) {
+		time.Sleep(200 * time.Millisecond)
+	}
+	fcancel()
+	<-fdone
+	if consumerFulfilled != int64(fulfilN) {
+		t.Fatalf("consumer fulfilled %d/%d stress orders", consumerFulfilled, fulfilN)
+	}
+
+	// Conservation: fulfilled stock left the warehouse entirely; unfulfilled
+	// confirmed orders remain allocated.
+	avail, reserved, allocated = e.stockLevel(t, tenantA, sku, wh)
+	if allocated != orders-fulfilN {
+		t.Fatalf("allocated=%d, want %d (unfulfilled confirmed orders)", allocated, orders-fulfilN)
+	}
+	if reserved != 0 || avail != 0 {
+		t.Fatalf("reserved=%d avail=%d, want 0/0", reserved, avail)
+	}
+	if avail+reserved+allocated != initial-fulfilN {
+		t.Fatalf("conservation broken: avail+reserved+allocated=%d, want %d", avail+reserved+allocated, initial-fulfilN)
+	}
+
+	// Reconciliation must derive every bucket exactly after the concurrent
+	// mixed traffic - the signed marker events must line up under contention.
+	w := stockservice.New(mustPool(t, stockSweeperDSN), nil)
+	drifts, err := w.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	for _, d := range drifts {
+		if d.SKUID == sku {
+			t.Fatalf("reconciliation drift on stressed sku: %+v", d)
+		}
+	}
 }
 
 // runDLQReplay builds and runs the dlqreplay CLI against the live brokers.
