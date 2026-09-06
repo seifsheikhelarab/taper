@@ -37,27 +37,13 @@ jobs:
       # Integration dependencies: Postgres (with Debezium's logical decoding
       # plugin), Kafka (KRaft), and Debezium Connect - the same stack as
       # docker-compose.yml, so CI runs the exact local setup.
-      - name: Start integration stack
-        run: docker compose up -d --wait postgres kafka connect
+      - name: Start data stores
+        run: docker compose up -d --wait postgres kafka
 
-      # connect-init is a sibling service (not a dependency of connect), so
-      # --wait does not start it; run it explicitly to register connectors.
-      - name: Register connectors
-        run: docker compose run --rm connect-init
-
-      - name: Wait for connectors
-        run: |
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:8083/connectors | grep -q stock-outbox; then
-              echo "connectors registered"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "connectors did not register in time"
-          docker logs taper-connect --tail 50
-          exit 1
-
+      # Migrations MUST precede connector registration: the connectors create
+      # their logical publications at startup (publication.autocreate.mode=
+      # filtered), and a publication made before the outbox tables exist is
+      # empty - the connector then runs forever without streaming events.
       - name: Apply migrations
         run: |
           docker compose exec -T postgres psql -U postgres -d taper_db < db/migrations/stock/000001_init_stock.up.sql
@@ -65,6 +51,32 @@ jobs:
           docker compose exec -T postgres psql -U postgres -d reservation_db < db/migrations/reservation/000001_init_reservation.up.sql
           docker compose exec -T postgres psql -U postgres -d order_db < db/migrations/order/000001_init_order.up.sql
           docker compose exec -T postgres psql -U postgres -d channelsync_db < db/migrations/channelsync/000001_init_channelsync.up.sql
+
+      - name: Start Debezium Connect
+        run: docker compose up -d --wait connect
+
+      # connect-init is a sibling service (not a dependency of connect), so
+      # --wait does not start it; run it explicitly to register connectors.
+      # Registration POSTs return only after the herder round-trips, which
+      # can take a minute per connector on a cold Connect instance.
+      - name: Register connectors
+        run: docker compose run --rm connect-init
+
+      - name: Wait for connector tasks
+        run: |
+          for i in $(seq 1 45); do
+            ok=1
+            for c in stock-outbox reservation-outbox order-outbox; do
+              state=$(curl -sf http://localhost:8083/connectors/$c/status | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['connector']['state'], d['tasks'][0]['state'] if d['tasks'] else 'NOTASK')" 2>/dev/null || echo missing)
+              echo "$c: $state"
+              case "$state" in *RUNNING*) ;; *) ok=0 ;; esac
+            done
+            [ "$ok" = "1" ] && exit 0
+            sleep 2
+          done
+          echo "connectors did not reach RUNNING in time"
+          docker logs taper-connect --tail 50
+          exit 1
 
       - name: Integration tests
         env:
