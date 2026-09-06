@@ -168,18 +168,22 @@ func (c *Consumer) deadLetter(ctx context.Context, msg kafka.Message, cause erro
 		return fmt.Errorf("marshal dlq envelope: %w", err)
 	}
 	dlqMsg := kafka.Message{Key: msg.Key, Value: b}
-	if c.dlqSink != nil {
-		if err := c.dlqSink(ctx, dlqMsg); err != nil {
-			return err
-		}
-		// Surface the dead-letter marker to callers via a sentinel error so
-		// Run logs it and the offset commits (poison messages never block).
-		return fmt.Errorf("dead-lettered after %d attempts: %w", attempts, cause)
-	}
-	if err := c.dlq.WriteMessages(ctx, dlqMsg); err != nil {
+	// Surface the dead-letter marker to callers via a sentinel error so
+	// Run logs it and the offset commits (poison messages never block).
+	err = c.writeDLQ(ctx, dlqMsg)
+	if err != nil {
 		return err
 	}
 	return fmt.Errorf("dead-lettered after %d attempts: %w", attempts, cause)
+}
+
+// writeDLQ publishes the envelope via the injected sink (tests) or the Kafka
+// DLQ writer.
+func (c *Consumer) writeDLQ(ctx context.Context, dlqMsg kafka.Message) error {
+	if c.dlqSink != nil {
+		return c.dlqSink(ctx, dlqMsg)
+	}
+	return c.dlq.WriteMessages(ctx, dlqMsg)
 }
 
 // Close releases the reader and DLQ writer.

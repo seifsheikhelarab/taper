@@ -115,7 +115,7 @@ func TestKafkaStockEventStreaming(t *testing.T) {
 	if key != tenant+":"+sku {
 		t.Fatalf("expected composite partition key %s:%s, got %s", tenant, sku, key)
 	}
-	var ev streaming.StockEvent
+	var ev streaming.OutboxEvent
 	if err := json.Unmarshal(m.Value, &ev); err != nil {
 		t.Fatalf("decode event: %v", err)
 	}
