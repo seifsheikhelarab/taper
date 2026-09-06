@@ -2,13 +2,14 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # Debezium-postgres build: includes decoderbufs/wal2json logical decoding plugins.
+    image: quay.io/debezium/postgres:16-alpine
     container_name: taper-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
       POSTGRES_DB: taper_db
-    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=4", "-c", "max_wal_senders=4"]
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=4", "-c", "max_wal_senders=4", "-c", "output_plugin_libraries=pgoutput,decoderbufs"]
     ports:
       - "5432:5432"
     healthcheck:
@@ -21,33 +22,64 @@ services:
       - ./db/init:/docker-entrypoint-initdb.d:ro
 
   kafka:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:3.9.0
     container_name: taper-kafka
     environment:
-      # KRaft mode: no ZooKeeper.
-      KAFKA_CFG_NODE_ID: "1"
-      KAFKA_CFG_PROCESS_ROLES: "controller,broker"
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
-      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
-      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
-      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_CFG_NUM_PARTITIONS: "6"
+      # KRaft mode: no ZooKeeper (single-node combined broker+controller).
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "controller,broker"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      # INTERNAL for containers, EXTERNAL for host-side tests/clients.
+      KAFKA_LISTENERS: "INTERNAL://:9092,EXTERNAL://:29092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka:9092,EXTERNAL://localhost:29092"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: "6"
+      # Single-node cluster: internal topics must have RF=1 or they can never be created.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      CLUSTER_ID: "taper-kafka-cluster-001"
     ports:
-      - "9092:9092"
+      - "29092:29092"
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list >/dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 12
+
+  # Pre-creates Connect's internal topics with cleanup.policy=compact.
+  # If they are auto-created with 'delete', Connect refuses to start
+  # (it requires compacted offset/config/status topics).
+  kafka-init:
+    image: apache/kafka:3.9.0
+    container_name: taper-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        B=kafka:9092
+        create_compacted() {
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$B --create --if-not-exists \
+            --topic "$$1" --partitions "$$2" --replication-factor 1 \
+            --config cleanup.policy=compact >/dev/null
+          echo "compacted topic ready: $$1 (partitions=$$2)"
+        }
+        create_compacted connect_configs 1
+        create_compacted connect_offsets 1
+        create_compacted connect_statuses 1
 
   connect:
     image: quay.io/debezium/connect:2.7
     container_name: taper-connect
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
+      # Connect runs inside the network and talks to the INTERNAL listener.
       GROUP_ID: "1"
       CONFIG_STORAGE_TOPIC: connect_configs
       OFFSET_STORAGE_TOPIC: connect_offsets
@@ -64,6 +96,8 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     healthcheck:

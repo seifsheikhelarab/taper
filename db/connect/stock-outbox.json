@@ -9,6 +9,8 @@
     "database.dbname": "taper_db",
     "topic.prefix": "stock",
     "table.include.list": "public.outbox",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.storage.StringConverter",
     "slot.name": "stock_outbox_slot",
     "publication.name": "stock_outbox_pub",
     "publication.autocreate.mode": "filtered",
@@ -20,6 +22,7 @@
     "transforms.outbox.table.field.event.type": "event_type",
     "transforms.outbox.table.field.event.payload": "payload",
     "transforms.outbox.route.by.field": "aggregate_type",
-    "transforms.outbox.route.topic.replacement": "stock.events"
+    "transforms.outbox.route.topic.replacement": "stock.events",
+    "transforms.outbox.table.fields.additional.placement": "event_type:header:eventType"
   }
 }
