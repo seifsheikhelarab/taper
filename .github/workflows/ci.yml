@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l . | grep -v '^gen/' || true)
+          if [ -n "$unformatted" ]; then
+            echo "unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Unit tests
+        run: go test ./pkg/...
+
+      # Integration dependencies: Postgres (with Debezium's logical decoding
+      # plugin), Kafka (KRaft), and Debezium Connect - the same stack as
+      # docker-compose.yml, so CI runs the exact local setup.
+      - name: Start integration stack
+        run: docker compose up -d --wait postgres kafka connect
+
+      - name: Wait for connectors
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8083/connectors | grep -q stock-outbox; then
+              echo "connectors registered"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "connectors did not register in time"
+          docker logs taper-connect --tail 50
+          exit 1
+
+      - name: Apply migrations
+        run: |
+          docker compose exec -T postgres psql -U postgres -d taper_db < db/migrations/stock/000001_init_stock.up.sql
+          docker compose exec -T postgres psql -U postgres -d taper_db < db/migrations/stock/000002_grant_sweeper.up.sql
+          docker compose exec -T postgres psql -U postgres -d reservation_db < db/migrations/reservation/000001_init_reservation.up.sql
+          docker compose exec -T postgres psql -U postgres -d order_db < db/migrations/order/000001_init_order.up.sql
+          docker compose exec -T postgres psql -U postgres -d channelsync_db < db/migrations/channelsync/000001_init_channelsync.up.sql
+
+      - name: Integration tests
+        env:
+          KAFKA_BROKERS: localhost:29092
+        run: go test -v ./integration/
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail 50 postgres kafka connect || true
