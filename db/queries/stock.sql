@@ -69,3 +69,22 @@ UPDATE stock_levels
 SET is_locked_for_audit = $4,
     updated_at = NOW()
 WHERE tenant_id = $1 AND sku_id = $2 AND warehouse_id = $3;
+
+-- name: ListDistinctEventLocations :many
+SELECT DISTINCT tenant_id, sku_id, warehouse_id
+FROM stock_events;
+
+-- name: SumDeltasByReason :many
+SELECT reason, SUM(delta)::BIGINT AS total_delta
+FROM stock_events
+WHERE tenant_id = $1 AND sku_id = $2 AND warehouse_id = $3
+GROUP BY reason;
+
+-- name: ListLockedLocations :many
+SELECT tenant_id, sku_id, warehouse_id
+FROM stock_levels
+WHERE is_locked_for_audit;
+
+-- name: GetStockLevelAny :one
+SELECT * FROM stock_levels
+WHERE tenant_id = $1 AND sku_id = $2 AND warehouse_id = $3;

@@ -350,6 +350,20 @@ func (s *Server) ConfirmStockAllocation(ctx context.Context, req *stockv1.Confir
 			}); err != nil {
 				return err
 			}
+			// Marker event: reserved -> allocated moves no available_qty, but
+			// carries the positive moved quantity (reason "allocate") so
+			// reconciliation can derive reserved and allocated buckets.
+			if _, err := q.InsertStockEvent(ctx, stockdb.InsertStockEventParams{
+				TenantID:    tenantUUID,
+				SkuID:       l.SkuId,
+				WarehouseID: l.WarehouseId,
+				Delta:       l.Quantity,
+				Reason:      "allocate",
+				Source:      "reservation",
+				ActorID:     "system",
+			}); err != nil {
+				return err
+			}
 			if _, err := q.InsertOutboxEvent(ctx, stockdb.InsertOutboxEventParams{
 				TenantID:      tenantUUID,
 				AggregateType: "stock",
@@ -416,14 +430,15 @@ func (s *Server) FulfillStock(ctx context.Context, req *stockv1.FulfillStockRequ
 			}); err != nil {
 				return err
 			}
-			// Marker event (delta 0): allocated departure is not an
-			// available_qty movement, but the audit log must cover every
-			// stock level update so reconciliation can derive all buckets.
+			// Marker event: allocated departure is not an available_qty
+			// movement, but carries the positive fulfilled quantity (reason
+			// "fulfill") so reconciliation can derive the allocated bucket
+			// and total physical decrement.
 			if _, err := q.InsertStockEvent(ctx, stockdb.InsertStockEventParams{
 				TenantID:    tenantUUID,
 				SkuID:       l.SkuId,
 				WarehouseID: l.WarehouseId,
-				Delta:       0,
+				Delta:       l.Quantity,
 				Reason:      "fulfill",
 				Source:      "fulfillment",
 				ActorID:     "system",
