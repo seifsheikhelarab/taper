@@ -342,7 +342,7 @@ func TestSagaResumeAfterCrash(t *testing.T) {
 		Items:          []*resv1.ReservationItem{{SkuId: "SKU-SAGA-8", WarehouseId: "W1", Quantity: 3}},
 	}); err != nil {
 		t.Fatalf("seed reserve: %v", err)
-	}	// Resume via ResumePendingSagas (what a restarted orchestrator does).
+	} // Resume via ResumePendingSagas (what a restarted orchestrator does).
 	if err := e.resumeSagas(t, 10); err != nil {
 		t.Fatalf("ResumePendingSagas: %v", err)
 	}
