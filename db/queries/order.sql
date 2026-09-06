@@ -86,6 +86,10 @@ INSERT INTO outbox (
 )
 RETURNING *;
 
+-- name: GetIdempotencyKey :one
+SELECT payload_hash FROM processed_idempotency_keys
+WHERE tenant_id = $1 AND idempotency_key = $2;
+
 -- name: CheckAndInsertIdempotencyKey :one
 INSERT INTO processed_idempotency_keys (
     tenant_id,

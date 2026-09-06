@@ -192,18 +192,20 @@ func TestPhase3FulfillOrderPreconditions(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}
-	// Re-FulfillOrder after FULFILLED is a successful no-op.
+	// Re-FulfillOrder after FULFILLED (original key) is a successful no-op.
 	fulfillOrder(t, e, tenant, "ord-p3-2")
-	// Same idempotency key, different payload: still a FULFILLED no-op
-	// (the order state, not the payload hash, guards the replay).
-	resp, err := e.order.FulfillOrder(context.Background(), &orderv1.FulfillOrderRequest{
+	// A different (non-original) request on a FULFILLED order is rejected:
+	// only genuine replays pass.
+	if _, err := e.order.FulfillOrder(context.Background(), &orderv1.FulfillOrderRequest{
 		TenantId: tenant, OrderId: "ord-p3-2", IdempotencyKey: "different-key",
-	})
-	if err != nil {
-		t.Fatalf("replay with different key: %v", err)
+	}); err == nil {
+		t.Fatal("want rejection for non-original request on FULFILLED order")
 	}
-	if !resp.GetSuccess() || resp.GetStatus() != "FULFILLED" {
-		t.Fatalf("want FULFILLED no-op, got %+v", resp)
+	// No idempotency key on a FULFILLED order is likewise rejected.
+	if _, err := e.order.FulfillOrder(context.Background(), &orderv1.FulfillOrderRequest{
+		TenantId: tenant, OrderId: "ord-p3-2",
+	}); err == nil {
+		t.Fatal("want rejection for keyless request on FULFILLED order")
 	}
 }
 

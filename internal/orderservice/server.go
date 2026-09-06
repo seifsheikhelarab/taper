@@ -404,16 +404,26 @@ func (s *Saga) FulfillOrder(ctx context.Context, req *orderv1.FulfillOrderReques
 		if err != nil {
 			return err
 		}
-		// Idempotency: a replay of an already-fulfilled order is a no-op.
+		// Already FULFILLED: only the original replay (same idempotency key,
+		// same payload hash) succeeds as a no-op; anything else is rejected
+		// so a second, distinct fulfillment request cannot masquerade as a
+		// replay.
 		if o.Status == OrderFulfilled {
-			if req.GetIdempotencyKey() != "" {
-				if _, err := q.CheckAndInsertIdempotencyKey(ctx, orderdb.CheckAndInsertIdempotencyKeyParams{
-					TenantID:       tenantUUID,
-					IdempotencyKey: req.GetIdempotencyKey(),
-					PayloadHash:    hashPayload(req),
-				}); err != nil {
-					return err
-				}
+			if req.GetIdempotencyKey() == "" {
+				return status.Errorf(codes.FailedPrecondition, "order %s is already FULFILLED", req.GetOrderId())
+			}
+			storedHash, err := q.GetIdempotencyKey(ctx, orderdb.GetIdempotencyKeyParams{
+				TenantID:       tenantUUID,
+				IdempotencyKey: req.GetIdempotencyKey(),
+			})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return status.Errorf(codes.FailedPrecondition, "order %s is already FULFILLED", req.GetOrderId())
+			}
+			if err != nil {
+				return err
+			}
+			if storedHash != hashPayload(req) {
+				return status.Errorf(codes.FailedPrecondition, "order %s is already FULFILLED (payload mismatch)", req.GetOrderId())
 			}
 			resp = &orderv1.FulfillOrderResponse{Success: true, Status: OrderFulfilled}
 			return nil
@@ -427,10 +437,22 @@ func (s *Saga) FulfillOrder(ctx context.Context, req *orderv1.FulfillOrderReques
 				IdempotencyKey: req.GetIdempotencyKey(),
 				PayloadHash:    hashPayload(req),
 			}); errors.Is(err, pgx.ErrNoRows) {
-				// Same key as a committed fulfillment: no-op success.
-				resp = &orderv1.FulfillOrderResponse{Success: true, Status: OrderFulfilled}
-				return nil
-			} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				// Key already recorded: only a genuine fulfillment replay
+				// (same payload hash) is a no-op success; a cross-RPC key
+				// collision must not fake a fulfillment.
+				storedHash, gerr := q.GetIdempotencyKey(ctx, orderdb.GetIdempotencyKeyParams{
+					TenantID:       tenantUUID,
+					IdempotencyKey: req.GetIdempotencyKey(),
+				})
+				if gerr != nil {
+					return gerr
+				}
+				if storedHash == hashPayload(req) {
+					resp = &orderv1.FulfillOrderResponse{Success: true, Status: OrderFulfilled}
+					return nil
+				}
+				return status.Errorf(codes.FailedPrecondition, "idempotency key %s already used with a different payload", req.GetIdempotencyKey())
+			} else if err != nil {
 				return err
 			}
 		}
