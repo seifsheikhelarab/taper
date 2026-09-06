@@ -9,6 +9,7 @@ service StockService {
   rpc ReserveStock(ReserveStockRequest) returns (ReserveStockResponse);
   rpc ReleaseStock(ReleaseStockRequest) returns (ReleaseStockResponse);
   rpc ConfirmStockAllocation(ConfirmStockAllocationRequest) returns (ConfirmStockAllocationResponse);
+  rpc FulfillStock(FulfillStockRequest) returns (FulfillStockResponse);
   rpc UnlockStockForAudit(UnlockStockForAuditRequest) returns (UnlockStockForAuditResponse);
 }
 
@@ -53,6 +54,24 @@ message StockAllocationLine {
 message ConfirmStockAllocationResponse {
   bool success = 1;
   repeated StockAllocationLine lines = 2;
+}
+
+message FulfillStockRequest {
+  string tenant_id = 1;
+  string order_id = 2;
+  string idempotency_key = 3;
+  repeated StockLine lines = 4;
+}
+
+message FulfillStockLine {
+  string sku_id = 1;
+  string warehouse_id = 2;
+  int32 remaining_allocated_qty = 3;
+}
+
+message FulfillStockResponse {
+  bool success = 1;
+  repeated FulfillStockLine lines = 2;
 }
 
 message ReserveStockRequest {

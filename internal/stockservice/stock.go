@@ -374,6 +374,86 @@ func (s *Server) ConfirmStockAllocation(ctx context.Context, req *stockv1.Confir
 	return resp, nil
 }
 
+// FulfillStock decrements allocated quantities for dispatched order lines
+// (CONTEXT.md Fulfilled Stock: inventory has physically departed the
+// warehouse, clearing allocated count). Available quantity is untouched: the
+// goods left sellable stock at reservation time.
+func (s *Server) FulfillStock(ctx context.Context, req *stockv1.FulfillStockRequest) (*stockv1.FulfillStockResponse, error) {
+	tenantUUID, err := database.ParseUUID(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	ctx = database.WithTenantID(ctx, req.GetTenantId())
+	lines := sortedLines(req.GetLines())
+
+	var resp *stockv1.FulfillStockResponse
+	err = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {
+		q := stockdb.New(tx)
+		dup, err := tryIdempotency(ctx, q, tenantUUID, req.GetIdempotencyKey(), req)
+		if err != nil {
+			return err
+		}
+		if dup {
+			resp = &stockv1.FulfillStockResponse{Success: true}
+			return nil
+		}
+		var out []*stockv1.FulfillStockLine
+		for _, l := range lines {
+			loc := StockLocation{TenantID: tenantUUID, SkuID: l.SkuId, WarehouseID: l.WarehouseId}
+			level, err := q.GetStockLevelForUpdate(ctx, stockLevelParams(loc))
+			if err != nil {
+				return err
+			}
+			if _, err := q.UpdateStockLevel(ctx, stockdb.UpdateStockLevelParams{
+				TenantID:         tenantUUID,
+				SkuID:            l.SkuId,
+				WarehouseID:      l.WarehouseId,
+				AvailableQty:     level.AvailableQty,
+				ReservedQty:      level.ReservedQty,
+				AllocatedQty:     level.AllocatedQty - l.Quantity,
+				IsLockedForAudit: level.IsLockedForAudit,
+				UpdatedAt:        level.UpdatedAt,
+			}); err != nil {
+				return err
+			}
+			// Marker event (delta 0): allocated departure is not an
+			// available_qty movement, but the audit log must cover every
+			// stock level update so reconciliation can derive all buckets.
+			if _, err := q.InsertStockEvent(ctx, stockdb.InsertStockEventParams{
+				TenantID:    tenantUUID,
+				SkuID:       l.SkuId,
+				WarehouseID: l.WarehouseId,
+				Delta:       0,
+				Reason:      "fulfill",
+				Source:      "fulfillment",
+				ActorID:     "system",
+			}); err != nil {
+				return err
+			}
+			if _, err := q.InsertOutboxEvent(ctx, stockdb.InsertOutboxEventParams{
+				TenantID:      tenantUUID,
+				AggregateType: "stock",
+				AggregateID:   tenantUUID.String() + ":" + l.SkuId,
+				EventType:     "stock.fulfilled",
+				Payload:       marshalLineEvent("fulfill", req.GetOrderId(), l),
+			}); err != nil {
+				return err
+			}
+			out = append(out, &stockv1.FulfillStockLine{
+				SkuId:                 l.SkuId,
+				WarehouseId:           l.WarehouseId,
+				RemainingAllocatedQty: level.AllocatedQty - l.Quantity,
+			})
+		}
+		resp = &stockv1.FulfillStockResponse{Success: true, Lines: out}
+		return nil
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "fulfill stock: %v", err)
+	}
+	return resp, nil
+}
+
 // UnlockStockForAudit clears an audit lock after recording a reconciliation correction.
 func (s *Server) UnlockStockForAudit(ctx context.Context, req *stockv1.UnlockStockForAuditRequest) (*stockv1.UnlockStockForAuditResponse, error) {
 	tenantUUID, err := database.ParseUUID(req.GetTenantId())

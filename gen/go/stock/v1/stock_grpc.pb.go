@@ -23,6 +23,7 @@ const (
 	StockService_ReserveStock_FullMethodName           = "/stock.v1.StockService/ReserveStock"
 	StockService_ReleaseStock_FullMethodName           = "/stock.v1.StockService/ReleaseStock"
 	StockService_ConfirmStockAllocation_FullMethodName = "/stock.v1.StockService/ConfirmStockAllocation"
+	StockService_FulfillStock_FullMethodName           = "/stock.v1.StockService/FulfillStock"
 	StockService_UnlockStockForAudit_FullMethodName    = "/stock.v1.StockService/UnlockStockForAudit"
 )
 
@@ -34,6 +35,7 @@ type StockServiceClient interface {
 	ReserveStock(ctx context.Context, in *ReserveStockRequest, opts ...grpc.CallOption) (*ReserveStockResponse, error)
 	ReleaseStock(ctx context.Context, in *ReleaseStockRequest, opts ...grpc.CallOption) (*ReleaseStockResponse, error)
 	ConfirmStockAllocation(ctx context.Context, in *ConfirmStockAllocationRequest, opts ...grpc.CallOption) (*ConfirmStockAllocationResponse, error)
+	FulfillStock(ctx context.Context, in *FulfillStockRequest, opts ...grpc.CallOption) (*FulfillStockResponse, error)
 	UnlockStockForAudit(ctx context.Context, in *UnlockStockForAuditRequest, opts ...grpc.CallOption) (*UnlockStockForAuditResponse, error)
 }
 
@@ -85,6 +87,16 @@ func (c *stockServiceClient) ConfirmStockAllocation(ctx context.Context, in *Con
 	return out, nil
 }
 
+func (c *stockServiceClient) FulfillStock(ctx context.Context, in *FulfillStockRequest, opts ...grpc.CallOption) (*FulfillStockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FulfillStockResponse)
+	err := c.cc.Invoke(ctx, StockService_FulfillStock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *stockServiceClient) UnlockStockForAudit(ctx context.Context, in *UnlockStockForAuditRequest, opts ...grpc.CallOption) (*UnlockStockForAuditResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UnlockStockForAuditResponse)
@@ -103,6 +115,7 @@ type StockServiceServer interface {
 	ReserveStock(context.Context, *ReserveStockRequest) (*ReserveStockResponse, error)
 	ReleaseStock(context.Context, *ReleaseStockRequest) (*ReleaseStockResponse, error)
 	ConfirmStockAllocation(context.Context, *ConfirmStockAllocationRequest) (*ConfirmStockAllocationResponse, error)
+	FulfillStock(context.Context, *FulfillStockRequest) (*FulfillStockResponse, error)
 	UnlockStockForAudit(context.Context, *UnlockStockForAuditRequest) (*UnlockStockForAuditResponse, error)
 	mustEmbedUnimplementedStockServiceServer()
 }
@@ -125,6 +138,9 @@ func (UnimplementedStockServiceServer) ReleaseStock(context.Context, *ReleaseSto
 }
 func (UnimplementedStockServiceServer) ConfirmStockAllocation(context.Context, *ConfirmStockAllocationRequest) (*ConfirmStockAllocationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConfirmStockAllocation not implemented")
+}
+func (UnimplementedStockServiceServer) FulfillStock(context.Context, *FulfillStockRequest) (*FulfillStockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FulfillStock not implemented")
 }
 func (UnimplementedStockServiceServer) UnlockStockForAudit(context.Context, *UnlockStockForAuditRequest) (*UnlockStockForAuditResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UnlockStockForAudit not implemented")
@@ -222,6 +238,24 @@ func _StockService_ConfirmStockAllocation_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StockService_FulfillStock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FulfillStockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StockServiceServer).FulfillStock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StockService_FulfillStock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StockServiceServer).FulfillStock(ctx, req.(*FulfillStockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _StockService_UnlockStockForAudit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UnlockStockForAuditRequest)
 	if err := dec(in); err != nil {
@@ -262,6 +296,10 @@ var StockService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ConfirmStockAllocation",
 			Handler:    _StockService_ConfirmStockAllocation_Handler,
+		},
+		{
+			MethodName: "FulfillStock",
+			Handler:    _StockService_FulfillStock_Handler,
 		},
 		{
 			MethodName: "UnlockStockForAudit",
