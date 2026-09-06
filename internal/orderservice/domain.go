@@ -14,6 +14,7 @@ const (
 const (
 	OrderPending     = "PENDING"
 	OrderConfirmed   = "CONFIRMED"
+	OrderFulfilled   = "FULFILLED"
 	OrderCompensated = "COMPENSATED"
 	OrderFailed      = "FAILED"
 )
