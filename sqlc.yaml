@@ -24,3 +24,11 @@ sql:
         package: "order"
         out: "gen/go/db/order"
         sql_package: "pgx/v5"
+  - engine: "postgresql"
+    schema: "db/migrations/channelsync"
+    queries: "db/queries/channelsync.sql"
+    gen:
+      go:
+        package: "channelsync"
+        out: "gen/go/db/channelsync"
+        sql_package: "pgx/v5"

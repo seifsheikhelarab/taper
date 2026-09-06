@@ -1,0 +1,2 @@
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM taper_sweeper;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM taper_sweeper;

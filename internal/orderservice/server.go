@@ -383,6 +383,116 @@ func (s *Saga) CancelOrder(ctx context.Context, req *orderv1.CancelOrderRequest)
 	return &orderv1.CancelOrderResponse{Success: true, Status: SagaCompensated}, nil
 }
 
+// FulfillOrder transitions a CONFIRMED order to FULFILLED and emits the
+// order.fulfilled outbox event that drives stock fulfillment. Replays with
+// the same idempotency payload are successful no-ops; anything not
+// CONFIRMED (or already-FULFILLED with a different payload) is rejected.
+func (s *Saga) FulfillOrder(ctx context.Context, req *orderv1.FulfillOrderRequest) (*orderv1.FulfillOrderResponse, error) {
+	tenantUUID, err := database.ParseUUID(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	ctx = database.WithTenantID(ctx, req.GetTenantId())
+
+	var resp *orderv1.FulfillOrderResponse
+	err = database.ExecTxWithTenant(ctx, s.pool, func(tx pgx.Tx) error {
+		q := orderdb.New(tx)
+		o, err := q.GetOrderById(ctx, req.GetOrderId())
+		if errors.Is(err, pgx.ErrNoRows) {
+			return status.Error(codes.NotFound, "order not found")
+		}
+		if err != nil {
+			return err
+		}
+		// Already FULFILLED: only the original replay (same idempotency key,
+		// same payload hash) succeeds as a no-op; anything else is rejected
+		// so a second, distinct fulfillment request cannot masquerade as a
+		// replay.
+		if o.Status == OrderFulfilled {
+			if req.GetIdempotencyKey() == "" {
+				return status.Errorf(codes.FailedPrecondition, "order %s is already FULFILLED", req.GetOrderId())
+			}
+			storedHash, err := q.GetIdempotencyKey(ctx, orderdb.GetIdempotencyKeyParams{
+				TenantID:       tenantUUID,
+				IdempotencyKey: req.GetIdempotencyKey(),
+			})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return status.Errorf(codes.FailedPrecondition, "order %s is already FULFILLED", req.GetOrderId())
+			}
+			if err != nil {
+				return err
+			}
+			if storedHash != hashPayload(req) {
+				return status.Errorf(codes.FailedPrecondition, "order %s is already FULFILLED (payload mismatch)", req.GetOrderId())
+			}
+			resp = &orderv1.FulfillOrderResponse{Success: true, Status: OrderFulfilled}
+			return nil
+		}
+		if o.Status != OrderConfirmed {
+			return status.Errorf(codes.FailedPrecondition, "order %s is %s, must be CONFIRMED", req.GetOrderId(), o.Status)
+		}
+		if req.GetIdempotencyKey() != "" {
+			if _, err := q.CheckAndInsertIdempotencyKey(ctx, orderdb.CheckAndInsertIdempotencyKeyParams{
+				TenantID:       tenantUUID,
+				IdempotencyKey: req.GetIdempotencyKey(),
+				PayloadHash:    hashPayload(req),
+			}); errors.Is(err, pgx.ErrNoRows) {
+				// Key already recorded: only a genuine fulfillment replay
+				// (same payload hash) is a no-op success; a cross-RPC key
+				// collision must not fake a fulfillment.
+				storedHash, gerr := q.GetIdempotencyKey(ctx, orderdb.GetIdempotencyKeyParams{
+					TenantID:       tenantUUID,
+					IdempotencyKey: req.GetIdempotencyKey(),
+				})
+				if gerr != nil {
+					return gerr
+				}
+				if storedHash == hashPayload(req) {
+					resp = &orderv1.FulfillOrderResponse{Success: true, Status: OrderFulfilled}
+					return nil
+				}
+				return status.Errorf(codes.FailedPrecondition, "idempotency key %s already used with a different payload", req.GetIdempotencyKey())
+			} else if err != nil {
+				return err
+			}
+		}
+		lines, err := q.GetOrderLines(ctx, req.GetOrderId())
+		if err != nil {
+			return err
+		}
+		evLines := make([]*orderv1.OrderLine, 0, len(lines))
+		for _, l := range lines {
+			evLines = append(evLines, &orderv1.OrderLine{
+				SkuId:       l.SkuID,
+				WarehouseId: l.WarehouseID,
+				Quantity:    l.Quantity,
+			})
+		}
+		if _, err := q.UpdateOrderStatus(ctx, orderdb.UpdateOrderStatusParams{
+			OrderID:       req.GetOrderId(),
+			Status:        OrderFulfilled,
+			TransactionID: o.TransactionID,
+		}); err != nil {
+			return err
+		}
+		if _, err := q.InsertOutboxEvent(ctx, orderdb.InsertOutboxEventParams{
+			TenantID:      tenantUUID,
+			AggregateType: "order",
+			AggregateID:   tenantUUID.String() + ":" + req.GetOrderId(),
+			EventType:     "order.fulfilled",
+			Payload:       marshalOrderEvent(OrderFulfilled, req.GetOrderId(), o.TotalAmount, evLines),
+		}); err != nil {
+			return err
+		}
+		resp = &orderv1.FulfillOrderResponse{Success: true, Status: OrderFulfilled}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 // compensate releases held stock and marks the saga compensated.
 func (s *Saga) compensate(ctx context.Context, tenantID, orderID, reason string) error {
 	tenantUUID, err := database.ParseUUID(tenantID)
@@ -435,7 +545,7 @@ func (s *Saga) transition(ctx context.Context, tenantUUID pgtype.UUID, orderID, 
 			AggregateType: "order",
 			AggregateID:   tenantUUID.String() + ":" + orderID,
 			EventType:     "order." + strings.ToLower(state),
-			Payload:       marshalSagaEvent(state, orderID, cur.TotalAmount),
+			Payload:       marshalOrderEvent(state, orderID, cur.TotalAmount, nil),
 		}); err != nil {
 			return err
 		}

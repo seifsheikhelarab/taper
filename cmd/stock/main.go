@@ -17,12 +17,20 @@ import (
 func main() {
 	addr := config.EnvOr("STOCK_ADDR", ":50051")
 	dsn := config.EnvOr("STOCK_DATABASE_URL", "postgres://taper_app:taperapp@localhost:5432/taper_db")
+	// Maintenance tasks (prune, reconcile) run cross-tenant and need the
+	// BYPASSRLS sweeper role; the RLS-bound app pool would see no rows.
+	sweeperDSN := config.EnvOr("STOCK_SWEEPER_DATABASE_URL", "postgres://taper_sweeper:tapersweeper@localhost:5432/taper_db")
 
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
 		log.Fatalf("connect db: %v", err)
 	}
 	defer pool.Close()
+	sweeperPool, err := pgxpool.New(context.Background(), sweeperDSN)
+	if err != nil {
+		log.Fatalf("connect sweeper db: %v", err)
+	}
+	defer sweeperPool.Close()
 
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -30,7 +38,11 @@ func main() {
 	}
 
 	// ADR-0002: batched outbox retention (off unless OUTBOX_PRUNE_ENABLED).
-	outboxprune.StartFromEnv(context.Background(), pool, log.Printf)
+	outboxprune.StartFromEnv(context.Background(), sweeperPool, log.Printf)
+
+	// ADR-0001: nightly stock reconciliation with drift locking (off unless
+	// RECONCILE_ENABLED).
+	go stockservice.New(sweeperPool, log.Printf).Run(context.Background())
 
 	srv := grpc.NewServer()
 	stockv1.RegisterStockServiceServer(srv, stockservice.NewServer(pool))

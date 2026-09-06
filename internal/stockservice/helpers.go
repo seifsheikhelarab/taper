@@ -79,13 +79,16 @@ func marshalLineEvent(action, orderID string, l *stockv1.StockLine) []byte {
 	return b
 }
 
-func marshalAdjustEvent(req *stockv1.AdjustStockRequest) ([]byte, error) {
+func marshalAdjustEvent(req *stockv1.AdjustStockRequest, newAvailable int32) ([]byte, error) {
 	b, err := json.Marshal(map[string]any{
 		"sku_id":         req.GetSkuId(),
 		"warehouse_id":   req.GetWarehouseId(),
 		"quantity_delta": req.GetQuantityDelta(),
-		"reason":         req.GetReason(),
-		"source":         req.GetSource(),
+		// Resulting absolute so consumers (e.g. channel availability
+		// projections) can upsert without replaying history.
+		"available_qty": newAvailable,
+		"reason":        req.GetReason(),
+		"source":        req.GetSource(),
 	})
 	return b, err
 }

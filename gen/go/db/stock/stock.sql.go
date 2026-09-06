@@ -36,6 +36,33 @@ func (q *Queries) CheckAndInsertIdempotencyKey(ctx context.Context, arg CheckAnd
 	return idempotency_key, err
 }
 
+const getStockLevelAny = `-- name: GetStockLevelAny :one
+SELECT tenant_id, sku_id, warehouse_id, available_qty, reserved_qty, allocated_qty, is_locked_for_audit, updated_at FROM stock_levels
+WHERE tenant_id = $1 AND sku_id = $2 AND warehouse_id = $3
+`
+
+type GetStockLevelAnyParams struct {
+	TenantID    pgtype.UUID
+	SkuID       string
+	WarehouseID string
+}
+
+func (q *Queries) GetStockLevelAny(ctx context.Context, arg GetStockLevelAnyParams) (StockLevel, error) {
+	row := q.db.QueryRow(ctx, getStockLevelAny, arg.TenantID, arg.SkuID, arg.WarehouseID)
+	var i StockLevel
+	err := row.Scan(
+		&i.TenantID,
+		&i.SkuID,
+		&i.WarehouseID,
+		&i.AvailableQty,
+		&i.ReservedQty,
+		&i.AllocatedQty,
+		&i.IsLockedForAudit,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getStockLevelForUpdate = `-- name: GetStockLevelForUpdate :one
 SELECT tenant_id, sku_id, warehouse_id, available_qty, reserved_qty, allocated_qty, is_locked_for_audit, updated_at FROM stock_levels
 WHERE tenant_id = $1 AND sku_id = $2 AND warehouse_id = $3
@@ -156,6 +183,69 @@ func (q *Queries) InsertStockEvent(ctx context.Context, arg InsertStockEventPara
 	return i, err
 }
 
+const listDistinctEventLocations = `-- name: ListDistinctEventLocations :many
+SELECT DISTINCT tenant_id, sku_id, warehouse_id
+FROM stock_events
+`
+
+type ListDistinctEventLocationsRow struct {
+	TenantID    pgtype.UUID
+	SkuID       string
+	WarehouseID string
+}
+
+func (q *Queries) ListDistinctEventLocations(ctx context.Context) ([]ListDistinctEventLocationsRow, error) {
+	rows, err := q.db.Query(ctx, listDistinctEventLocations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDistinctEventLocationsRow
+	for rows.Next() {
+		var i ListDistinctEventLocationsRow
+		if err := rows.Scan(&i.TenantID, &i.SkuID, &i.WarehouseID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLockedLocations = `-- name: ListLockedLocations :many
+SELECT tenant_id, sku_id, warehouse_id
+FROM stock_levels
+WHERE is_locked_for_audit
+`
+
+type ListLockedLocationsRow struct {
+	TenantID    pgtype.UUID
+	SkuID       string
+	WarehouseID string
+}
+
+func (q *Queries) ListLockedLocations(ctx context.Context) ([]ListLockedLocationsRow, error) {
+	rows, err := q.db.Query(ctx, listLockedLocations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLockedLocationsRow
+	for rows.Next() {
+		var i ListLockedLocationsRow
+		if err := rows.Scan(&i.TenantID, &i.SkuID, &i.WarehouseID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setAuditLock = `-- name: SetAuditLock :exec
 UPDATE stock_levels
 SET is_locked_for_audit = $4,
@@ -178,6 +268,44 @@ func (q *Queries) SetAuditLock(ctx context.Context, arg SetAuditLockParams) erro
 		arg.IsLockedForAudit,
 	)
 	return err
+}
+
+const sumDeltasByReason = `-- name: SumDeltasByReason :many
+SELECT reason, SUM(delta)::BIGINT AS total_delta
+FROM stock_events
+WHERE tenant_id = $1 AND sku_id = $2 AND warehouse_id = $3
+GROUP BY reason
+`
+
+type SumDeltasByReasonParams struct {
+	TenantID    pgtype.UUID
+	SkuID       string
+	WarehouseID string
+}
+
+type SumDeltasByReasonRow struct {
+	Reason     string
+	TotalDelta int64
+}
+
+func (q *Queries) SumDeltasByReason(ctx context.Context, arg SumDeltasByReasonParams) ([]SumDeltasByReasonRow, error) {
+	rows, err := q.db.Query(ctx, sumDeltasByReason, arg.TenantID, arg.SkuID, arg.WarehouseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SumDeltasByReasonRow
+	for rows.Next() {
+		var i SumDeltasByReasonRow
+		if err := rows.Scan(&i.Reason, &i.TotalDelta); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateStockLevel = `-- name: UpdateStockLevel :one

@@ -36,6 +36,23 @@ func (q *Queries) CheckAndInsertIdempotencyKey(ctx context.Context, arg CheckAnd
 	return idempotency_key, err
 }
 
+const getIdempotencyKey = `-- name: GetIdempotencyKey :one
+SELECT payload_hash FROM processed_idempotency_keys
+WHERE tenant_id = $1 AND idempotency_key = $2
+`
+
+type GetIdempotencyKeyParams struct {
+	TenantID       pgtype.UUID
+	IdempotencyKey string
+}
+
+func (q *Queries) GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyParams) (string, error) {
+	row := q.db.QueryRow(ctx, getIdempotencyKey, arg.TenantID, arg.IdempotencyKey)
+	var payload_hash string
+	err := row.Scan(&payload_hash)
+	return payload_hash, err
+}
+
 const getOrderById = `-- name: GetOrderById :one
 SELECT id, tenant_id, order_id, status, total_amount, currency, transaction_id, created_at, updated_at FROM orders
 WHERE order_id = $1

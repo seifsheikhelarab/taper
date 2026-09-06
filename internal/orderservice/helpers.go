@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strconv"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 
@@ -16,11 +17,6 @@ func hashPayload(msg proto.Message) string {
 	return hex.EncodeToString(h[:])
 }
 
-// marshalSagaEvent builds the outbox payload for a saga/order transition.
-func marshalSagaEvent(eventType, orderID string, total int64) []byte {
-	return []byte(`{"event_type":"` + eventType + `","order_id":"` + orderID + `","total_amount":` + strconv.FormatInt(total, 10) + `}`)
-}
-
 // orderTotal sums quantity * unit_price across lines.
 func orderTotal(lines []*orderv1.OrderLine) int64 {
 	var total int64
@@ -28,4 +24,35 @@ func orderTotal(lines []*orderv1.OrderLine) int64 {
 		total += int64(l.GetQuantity()) * l.GetUnitPrice()
 	}
 	return total
+}
+
+// marshalOrderEvent builds an outbox payload for an order transition. Lines
+// are included when the downstream consumer needs them (fulfillment fans out
+// per line to the stock service).
+func marshalOrderEvent(state, orderID string, total int64, lines []*orderv1.OrderLine) []byte {
+	var b strings.Builder
+	b.WriteString(`{"event_type":"`)
+	b.WriteString("order." + strings.ToLower(state))
+	b.WriteString(`","order_id":"`)
+	b.WriteString(orderID)
+	b.WriteString(`","total_amount":`)
+	b.WriteString(strconv.FormatInt(total, 10))
+	if len(lines) > 0 {
+		b.WriteString(`,"lines":[`)
+		for i, l := range lines {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(`{"sku_id":"`)
+			b.WriteString(l.GetSkuId())
+			b.WriteString(`","warehouse_id":"`)
+			b.WriteString(l.GetWarehouseId())
+			b.WriteString(`","quantity":`)
+			b.WriteString(strconv.FormatInt(int64(l.GetQuantity()), 10))
+			b.WriteByte('}')
+		}
+		b.WriteByte(']')
+	}
+	b.WriteByte('}')
+	return []byte(b.String())
 }

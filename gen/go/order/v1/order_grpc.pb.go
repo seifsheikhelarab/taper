@@ -19,9 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OrderService_CreateOrder_FullMethodName = "/order.v1.OrderService/CreateOrder"
-	OrderService_GetOrder_FullMethodName    = "/order.v1.OrderService/GetOrder"
-	OrderService_CancelOrder_FullMethodName = "/order.v1.OrderService/CancelOrder"
+	OrderService_CreateOrder_FullMethodName  = "/order.v1.OrderService/CreateOrder"
+	OrderService_GetOrder_FullMethodName     = "/order.v1.OrderService/GetOrder"
+	OrderService_CancelOrder_FullMethodName  = "/order.v1.OrderService/CancelOrder"
+	OrderService_FulfillOrder_FullMethodName = "/order.v1.OrderService/FulfillOrder"
 )
 
 // OrderServiceClient is the client API for OrderService service.
@@ -37,6 +38,9 @@ type OrderServiceClient interface {
 	GetOrder(ctx context.Context, in *GetOrderRequest, opts ...grpc.CallOption) (*GetOrderResponse, error)
 	// CancelOrder compensates an order still inside its payment window.
 	CancelOrder(ctx context.Context, in *CancelOrderRequest, opts ...grpc.CallOption) (*CancelOrderResponse, error)
+	// FulfillOrder transitions a CONFIRMED order to FULFILLED after physical
+	// dispatch; the order.fulfilled outbox event drives stock fulfillment.
+	FulfillOrder(ctx context.Context, in *FulfillOrderRequest, opts ...grpc.CallOption) (*FulfillOrderResponse, error)
 }
 
 type orderServiceClient struct {
@@ -77,6 +81,16 @@ func (c *orderServiceClient) CancelOrder(ctx context.Context, in *CancelOrderReq
 	return out, nil
 }
 
+func (c *orderServiceClient) FulfillOrder(ctx context.Context, in *FulfillOrderRequest, opts ...grpc.CallOption) (*FulfillOrderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FulfillOrderResponse)
+	err := c.cc.Invoke(ctx, OrderService_FulfillOrder_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OrderServiceServer is the server API for OrderService service.
 // All implementations must embed UnimplementedOrderServiceServer
 // for forward compatibility.
@@ -90,6 +104,9 @@ type OrderServiceServer interface {
 	GetOrder(context.Context, *GetOrderRequest) (*GetOrderResponse, error)
 	// CancelOrder compensates an order still inside its payment window.
 	CancelOrder(context.Context, *CancelOrderRequest) (*CancelOrderResponse, error)
+	// FulfillOrder transitions a CONFIRMED order to FULFILLED after physical
+	// dispatch; the order.fulfilled outbox event drives stock fulfillment.
+	FulfillOrder(context.Context, *FulfillOrderRequest) (*FulfillOrderResponse, error)
 	mustEmbedUnimplementedOrderServiceServer()
 }
 
@@ -108,6 +125,9 @@ func (UnimplementedOrderServiceServer) GetOrder(context.Context, *GetOrderReques
 }
 func (UnimplementedOrderServiceServer) CancelOrder(context.Context, *CancelOrderRequest) (*CancelOrderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CancelOrder not implemented")
+}
+func (UnimplementedOrderServiceServer) FulfillOrder(context.Context, *FulfillOrderRequest) (*FulfillOrderResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FulfillOrder not implemented")
 }
 func (UnimplementedOrderServiceServer) mustEmbedUnimplementedOrderServiceServer() {}
 func (UnimplementedOrderServiceServer) testEmbeddedByValue()                      {}
@@ -184,6 +204,24 @@ func _OrderService_CancelOrder_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OrderService_FulfillOrder_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FulfillOrderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrderServiceServer).FulfillOrder(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrderService_FulfillOrder_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrderServiceServer).FulfillOrder(ctx, req.(*FulfillOrderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // OrderService_ServiceDesc is the grpc.ServiceDesc for OrderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -202,6 +240,10 @@ var OrderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CancelOrder",
 			Handler:    _OrderService_CancelOrder_Handler,
+		},
+		{
+			MethodName: "FulfillOrder",
+			Handler:    _OrderService_FulfillOrder_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
