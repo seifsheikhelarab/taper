@@ -104,7 +104,7 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 			return err
 		}
 
-		payload, _ := marshalAdjustEvent(req)
+		payload, _ := marshalAdjustEvent(req, newAvailable)
 		_, err = q.InsertOutboxEvent(ctx, stockdb.InsertOutboxEventParams{
 			TenantID:      tenantUUID,
 			AggregateType: "stock",
@@ -132,6 +132,7 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 				"warehouse_id": req.GetWarehouseId(),
 				"delta":        req.GetQuantityDelta(),
 				"reason":       req.GetReason(),
+				"source":       req.GetSource(),
 			})
 			if _, err := q.InsertOutboxEvent(ctx, stockdb.InsertOutboxEventParams{
 				TenantID:      tenantUUID,
