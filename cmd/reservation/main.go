@@ -13,6 +13,7 @@ import (
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 	"github.com/seifsheikhelarab/taper/internal/reservationservice"
 	"github.com/seifsheikhelarab/taper/pkg/config"
+	"github.com/seifsheikhelarab/taper/pkg/outboxprune"
 )
 
 func main() {
@@ -47,6 +48,10 @@ func main() {
 	sweeper := reservationservice.NewSweeper(sweeperPool, stock)
 	go sweeper.Run(ctx)
 
+	// ADR-0002: batched outbox retention via the BYPASSRLS sweeper pool
+	// (off unless OUTBOX_PRUNE_ENABLED).
+	outboxprune.StartFromEnv(ctx, sweeperPool, log.Printf)
+
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("listen: %v", err)
@@ -56,4 +61,3 @@ func main() {
 		log.Fatalf("serve: %v", err)
 	}
 }
-
