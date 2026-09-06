@@ -40,6 +40,11 @@ jobs:
       - name: Start integration stack
         run: docker compose up -d --wait postgres kafka connect
 
+      # connect-init is a sibling service (not a dependency of connect), so
+      # --wait does not start it; run it explicitly to register connectors.
+      - name: Register connectors
+        run: docker compose run --rm connect-init
+
       - name: Wait for connectors
         run: |
           for i in $(seq 1 30); do
