@@ -74,8 +74,17 @@ CREATE POLICY saga_instances_tenant_isolation_policy ON saga_instances
 CREATE POLICY order_lines_tenant_isolation_policy ON order_lines
     USING (tenant_id = app_current_tenant());
 
+-- The outbox policy is scoped to taper_app only, and Debezium snapshots the
+-- outbox as taper_cdc: RLS is default-deny for roles matching no policy, so
+-- CDC needs its own explicit permissive policy (OR'd with the tenant policy)
+-- to read every tenant's rows without a tenant context.
 CREATE POLICY outbox_tenant_isolation_policy ON outbox
+    TO taper_app
     USING (tenant_id = app_current_tenant());
+
+CREATE POLICY outbox_cdc_read_policy ON outbox
+    TO taper_cdc
+    USING (true);
 
 CREATE POLICY processed_idempotency_keys_tenant_isolation_policy ON processed_idempotency_keys
     USING (tenant_id = app_current_tenant());
@@ -86,3 +95,4 @@ GRANT ALL ON ALL TABLES IN SCHEMA public TO taper_app;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO taper_app;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO taper_sweeper;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO taper_sweeper;
+GRANT SELECT ON outbox TO taper_cdc;

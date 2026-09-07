@@ -40,12 +40,17 @@ jobs:
       - name: Start data stores
         run: docker compose up -d --wait postgres kafka
 
-      # Migrations MUST precede connector registration: the connectors create
-      # their logical publications at startup (publication.autocreate.mode=
-      # filtered), and a publication made before the outbox tables exist is
-      # empty - the connector then runs forever without streaming events.
+      # Migrations MUST precede connector registration: the connectors
+      # snapshot public.outbox as taper_cdc at startup, and both the SELECT
+      # grants and the outbox RLS scoping (to taper_app only) ship in the
+      # migrations. Registered before they exist, the snapshot fails with
+      # "permission denied" and retries forever - the task reports RUNNING
+      # while streaming nothing.
+      # postgres's init dance (temp server during initdb, then a restart)
+      # can slip past --wait; gate migrations on pg_isready instead.
       - name: Apply migrations
         run: |
+          until docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do sleep 2; done
           docker compose exec -T postgres psql -U postgres -d taper_db < db/migrations/stock/000001_init_stock.up.sql
           docker compose exec -T postgres psql -U postgres -d taper_db < db/migrations/stock/000002_grant_sweeper.up.sql
           docker compose exec -T postgres psql -U postgres -d reservation_db < db/migrations/reservation/000001_init_reservation.up.sql

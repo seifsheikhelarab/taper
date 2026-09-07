@@ -522,3 +522,55 @@ func runDLQReplay(t *testing.T, args ...string) string {
 	}
 	return string(out)
 }
+
+// TestCDCRoleCanReadOutbox is the regression test for the CI streaming
+// outage: Debezium snapshots public.outbox with plain SELECTs as taper_cdc,
+// so that role needs SELECT on outbox (granted in-migration) and must be
+// exempt from outbox tenant RLS (the policy is scoped to taper_app). When
+// either invariant breaks, the snapshot fails or comes back empty and the
+// connectors report RUNNING while streaming nothing.
+func TestCDCRoleCanReadOutbox(t *testing.T) {
+	tenant := "22222222-2222-2222-2222-222222222222"
+	cases := []struct {
+		dbname string
+		appDSN string
+	}{
+		{"taper_db", stockDSN},
+		{"reservation_db", reservationDSN},
+		{"order_db", orderDSN},
+	}
+	for _, tc := range cases {
+		t.Run(tc.dbname, func(t *testing.T) {
+			app := mustPool(t, tc.appDSN)
+			defer app.Close()
+			cdc := mustPool(t, fmt.Sprintf("postgres://taper_cdc:tapercdc@localhost:5432/%s", tc.dbname))
+			defer cdc.Close()
+
+			ctx := context.Background()
+			// Write a row through the app role's normal RLS-gated path.
+			tx, err := app.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, false)", tenant); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO outbox (id, tenant_id, aggregate_type, aggregate_id, event_type, payload)
+				VALUES (gen_random_uuid(), $1, 'Test', 'cdc-grant-probe', 'test.probe', '{}')`, tenant); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+
+			// The CDC role must read it back without any tenant context set.
+			var n int
+			if err := cdc.QueryRow(ctx, "SELECT count(*) FROM outbox").Scan(&n); err != nil {
+				t.Fatalf("taper_cdc cannot read outbox in %s (missing GRANT SELECT?): %v", tc.dbname, err)
+			}
+			if n < 1 {
+				t.Fatalf("taper_cdc sees 0 outbox rows in %s although rows exist (outbox RLS is hiding them)", tc.dbname)
+			}
+		})
+	}
+}

@@ -54,8 +54,19 @@ CREATE POLICY stock_levels_tenant_isolation_policy ON stock_levels
 CREATE POLICY stock_events_tenant_isolation_policy ON stock_events
     USING (tenant_id = app_current_tenant());
 
+-- The outbox policy is scoped to taper_app only, and Debezium snapshots the
+-- outbox as taper_cdc: RLS is default-deny for roles matching no policy, so
+-- CDC needs its own explicit permissive policy (OR'd with the tenant policy)
+-- to read every tenant's rows without a tenant context.
 CREATE POLICY outbox_tenant_isolation_policy ON outbox
+    TO taper_app
     USING (tenant_id = app_current_tenant());
+
+CREATE POLICY outbox_cdc_read_policy ON outbox
+    TO taper_cdc
+    USING (true);
+
+GRANT SELECT ON outbox TO taper_cdc;
 
 CREATE POLICY processed_idempotency_keys_tenant_isolation_policy ON processed_idempotency_keys
     USING (tenant_id = app_current_tenant());
