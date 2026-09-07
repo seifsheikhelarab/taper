@@ -172,13 +172,14 @@ func (c *Core) invoke(w http.ResponseWriter, r *http.Request, br *circuitbreaker
 
 	resp, err := call(ctx)
 	if err != nil {
-		httpErr := errorFromGRPC(err)
-		switch httpErr.code {
-		case codes.Unavailable.String(), codes.DeadlineExceeded.String():
+		// Transport-class failures feed the breaker; domain errors do not.
+		switch status.Code(err) {
+		case codes.Unavailable, codes.DeadlineExceeded:
 			br.RecordFailure()
 		default:
 			br.RecordSuccess()
 		}
+		httpErr := errorFromGRPC(err)
 		httpErr.write(w)
 		return
 	}
