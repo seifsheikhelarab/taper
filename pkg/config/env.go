@@ -26,6 +26,16 @@ func EnvBool(key string) bool {
 	}
 }
 
+// EnvOrFloat returns key parsed as a float, or def when unset or invalid.
+func EnvOrFloat(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
 // EnvDuration returns key parsed as a duration, or def when unset, invalid,
 // or non-positive.
 func EnvDuration(key string, def time.Duration) time.Duration {
