@@ -27,11 +27,11 @@ type bucket struct {
 
 // Limiter hands out one bucket per tenant.
 type Limiter struct {
-	mu     sync.Mutex
-	rate   float64 // tokens per second
-	burst  float64 // bucket capacity
+	mu      sync.Mutex
+	rate    float64 // tokens per second
+	burst   float64 // bucket capacity
 	buckets map[string]*bucket
-	now    func() time.Time
+	now     func() time.Time
 }
 
 // New creates a limiter refilling at rate tokens per second with burst
