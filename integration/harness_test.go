@@ -39,6 +39,9 @@ type testEnv struct {
 	stock         stockv1.StockServiceClient
 	reservation   resv1.ReservationServiceClient
 	order         orderv1.OrderServiceClient
+	stockConn     *grpc.ClientConn
+	resConn       *grpc.ClientConn
+	orderConn     *grpc.ClientConn
 	stockPool     *pgxpool.Pool
 	resPool       *pgxpool.Pool
 	orderPool     *pgxpool.Pool
@@ -158,6 +161,9 @@ func setup(t *testing.T) *testEnv {
 		stock:       stockv1.NewStockServiceClient(stockConn),
 		reservation: resv1.NewReservationServiceClient(resConn),
 		order:       orderv1.NewOrderServiceClient(orderConn),
+		stockConn:   stockConn,
+		resConn:     resConn,
+		orderConn:   orderConn,
 		stockPool:   stockPool,
 		resPool:     resPool,
 		orderPool:   orderPool,

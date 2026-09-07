@@ -25,7 +25,6 @@ func TestSandboxRoundTrip(t *testing.T) {
 func TestSandboxRejectsBadTokens(t *testing.T) {
 	s := NewSandbox([]byte("test-secret"))
 	other := NewSandbox([]byte("other-secret"))
-	tok, _ := s.Issue(context.Background(), "tenant-1", time.Minute)
 	wrongSig, _ := other.Issue(context.Background(), "tenant-1", time.Minute)
 	expired := func() string {
 		past := s.now
@@ -52,7 +51,6 @@ func TestSandboxRejectsBadTokens(t *testing.T) {
 			}
 		})
 	}
-	_ = tok
 }
 
 func TestSandboxEmptyTenantRejected(t *testing.T) {
