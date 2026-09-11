@@ -24,14 +24,14 @@ import (
 )
 
 // channelsyncDSN points at the channelsync projection database.
-const channelsyncDSN = "postgres://taper_app:taperapp@localhost:5432/channelsync_db"
+var channelsyncDSN = envOrDSN("TEST_CHANNELSYNC_DSN", "postgres://taper_app:taperapp@localhost:5432/channelsync_db")
 
 // stockSweeperDSN is the BYPASSRLS role against stock_db for the
 // reconciliation worker (cross-tenant maintenance).
-const stockSweeperDSN = "postgres://taper_sweeper:tapersweeper@localhost:5432/taper_db"
+var stockSweeperDSN = envOrDSN("TEST_STOCK_SWEEPER_DSN", "postgres://taper_sweeper:tapersweeper@localhost:5432/taper_db")
 
 // channelsyncSweeperDSN is the BYPASSRLS role against channelsync_db.
-const channelsyncSweeperDSN = "postgres://taper_sweeper:tapersweeper@localhost:5432/channelsync_db"
+var channelsyncSweeperDSN = envOrDSN("TEST_CHANNELSYNC_SWEEPER_DSN", "postgres://taper_sweeper:tapersweeper@localhost:5432/channelsync_db")
 
 // newGroupReader builds an ephemeral consumer-group reader starting at the
 // earliest offset (group-less readers receive no data on this broker).
@@ -543,7 +543,7 @@ func TestCDCRoleCanReadOutbox(t *testing.T) {
 		t.Run(tc.dbname, func(t *testing.T) {
 			app := mustPool(t, tc.appDSN)
 			defer app.Close()
-			cdc := mustPool(t, fmt.Sprintf("postgres://taper_cdc:tapercdc@localhost:5432/%s", tc.dbname))
+			cdc := mustPool(t, fmt.Sprintf("postgres://taper_cdc:tapercdc@%s/%s", envOrDSN("TEST_PG_ADDR", "localhost:5432"), tc.dbname))
 			defer cdc.Close()
 
 			ctx := context.Background()

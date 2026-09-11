@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -23,14 +24,17 @@ import (
 	"github.com/seifsheikhelarab/taper/pkg/payment"
 )
 
+var (
+	stockDSN        = envOrDSN("TEST_STOCK_DSN", "postgres://taper_app:taperapp@localhost:5432/taper_db")
+	reservationDSN  = envOrDSN("TEST_RESERVATION_DSN", "postgres://taper_app:taperapp@localhost:5432/reservation_db")
+	orderDSN        = envOrDSN("TEST_ORDER_DSN", "postgres://taper_app:taperapp@localhost:5432/order_db")
+	sweeperDSN      = envOrDSN("TEST_SWEEPER_DSN", "postgres://taper_sweeper:tapersweeper@localhost:5432/reservation_db")
+	orderSweeperDSN = envOrDSN("TEST_ORDER_SWEEPER_DSN", "postgres://taper_sweeper:tapersweeper@localhost:5432/order_db")
+)
+
 const (
-	stockDSN        = "postgres://taper_app:taperapp@localhost:5432/taper_db"
-	reservationDSN  = "postgres://taper_app:taperapp@localhost:5432/reservation_db"
-	orderDSN        = "postgres://taper_app:taperapp@localhost:5432/order_db"
-	sweeperDSN      = "postgres://taper_sweeper:tapersweeper@localhost:5432/reservation_db"
-	orderSweeperDSN = "postgres://taper_sweeper:tapersweeper@localhost:5432/order_db"
-	tenantA         = "11111111-1111-1111-1111-111111111111"
-	tenantB         = "22222222-2222-2222-2222-222222222222"
+	tenantA = "11111111-1111-1111-1111-111111111111"
+	tenantB = "22222222-2222-2222-2222-222222222222"
 )
 
 type testEnv struct {
@@ -232,6 +236,16 @@ func (e *testEnv) countReservations(t *testing.T, tenant, orderID string) int {
 		t.Fatalf("count reservations: %v", err)
 	}
 	return rows
+}
+
+// envOrDSN lets the test DSNs be overridden (e.g. TEST_STOCK_DSN) when a
+// locally installed Postgres on 5432 shadows the compose container; the
+// chaos suite targets the container's secondary host port 5433 directly.
+func envOrDSN(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func mustPool(t *testing.T, dsn string) *pgxpool.Pool {
