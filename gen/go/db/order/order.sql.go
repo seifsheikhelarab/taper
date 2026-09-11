@@ -222,11 +222,12 @@ INSERT INTO outbox (
     aggregate_type,
     aggregate_id,
     event_type,
-    payload
+    payload,
+    traceparent
 ) VALUES (
-    $1, $2, $3, $4, $5
+    $1, $2, $3, $4, $5, $6
 )
-RETURNING id, tenant_id, aggregate_type, aggregate_id, event_type, payload, created_at
+RETURNING id, tenant_id, aggregate_type, aggregate_id, event_type, payload, created_at, traceparent
 `
 
 type InsertOutboxEventParams struct {
@@ -235,6 +236,7 @@ type InsertOutboxEventParams struct {
 	AggregateID   string
 	EventType     string
 	Payload       []byte
+	Traceparent   pgtype.Text
 }
 
 func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) (Outbox, error) {
@@ -244,6 +246,7 @@ func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventPa
 		arg.AggregateID,
 		arg.EventType,
 		arg.Payload,
+		arg.Traceparent,
 	)
 	var i Outbox
 	err := row.Scan(
@@ -254,6 +257,7 @@ func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventPa
 		&i.EventType,
 		&i.Payload,
 		&i.CreatedAt,
+		&i.Traceparent,
 	)
 	return i, err
 }
