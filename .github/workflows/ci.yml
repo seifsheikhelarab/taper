@@ -51,11 +51,16 @@ jobs:
       - name: Apply migrations
         run: |
           until docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do sleep 2; done
-          docker compose exec -T postgres psql -U postgres -d taper_db < db/migrations/stock/000001_init_stock.up.sql
-          docker compose exec -T postgres psql -U postgres -d taper_db < db/migrations/stock/000002_grant_sweeper.up.sql
-          docker compose exec -T postgres psql -U postgres -d reservation_db < db/migrations/reservation/000001_init_reservation.up.sql
-          docker compose exec -T postgres psql -U postgres -d order_db < db/migrations/order/000001_init_order.up.sql
-          docker compose exec -T postgres psql -U postgres -d channelsync_db < db/migrations/channelsync/000001_init_channelsync.up.sql
+          # Every numbered migration per service, in filename order — a glob,
+          # not a hardcoded list, so adding a migration cannot be forgotten.
+          set -e
+          for pair in stock:taper_db reservation:reservation_db order:order_db channelsync:channelsync_db; do
+            svc="${pair%%:*}"; db="${pair##*:}"
+            for f in db/migrations/$svc/*.up.sql; do
+              echo "-- $f -> $db"
+              docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d "$db" < "$f"
+            done
+          done
 
       - name: Start Debezium Connect
         run: docker compose up -d --wait connect
