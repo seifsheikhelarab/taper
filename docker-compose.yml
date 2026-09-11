@@ -1,4 +1,15 @@
 services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: taper-jaeger
+    # OTLP ingestion for the taper services' traces (UI on 16686).
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+
   postgres:
     # Debezium-postgres build: includes decoderbufs/wal2json logical decoding plugins.
     image: quay.io/debezium/postgres:16-alpine
@@ -10,6 +21,9 @@ services:
     command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=4", "-c", "max_wal_senders=4", "-c", "output_plugin_libraries=pgoutput,decoderbufs"]
     ports:
       - "5432:5432"
+      # Second host port for subprocess tests (trace test, chaos suite) so a
+      # locally installed Postgres on 5432 cannot shadow the container's DBs.
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d taper_db"]
       interval: 5s

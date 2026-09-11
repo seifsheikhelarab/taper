@@ -1,11 +1,15 @@
 // Command gateway is the REST front for the internal gRPC services
 // (Phase 4, spec #35): JWT tenant auth, per-tenant rate limiting, and
 // Fail-Fast error mapping, per docs/research/0001-gateway-http-layer.md.
+// Phase 5 adds tracing (client spans join the inbound HTTP-less trace via
+// the gRPC interceptors) and Prometheus RED metrics.
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -14,6 +18,7 @@ import (
 	"github.com/seifsheikhelarab/taper/pkg/auth"
 	"github.com/seifsheikhelarab/taper/pkg/circuitbreaker"
 	"github.com/seifsheikhelarab/taper/pkg/config"
+	obs "github.com/seifsheikhelarab/taper/pkg/observability"
 	"github.com/seifsheikhelarab/taper/pkg/ratelimit"
 )
 
@@ -25,12 +30,37 @@ func main() {
 	secret := config.EnvOr("GATEWAY_JWT_SECRET", "taper-sandbox-secret")
 	rate := config.EnvOrFloat("GATEWAY_RATE_PER_TENANT", 10)
 	burst := config.EnvOrFloat("GATEWAY_BURST_PER_TENANT", 20)
+	metricsAddr := config.EnvOr("METRICS_ADDR", ":9106")
 
-	stockConn := dial(stockAddr)
+	provs, err := obs.Setup(context.Background(), obs.Config{
+		ServiceName:  "gateway",
+		OTLPEndpoint: config.EnvOr("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+	})
+	if err != nil {
+		log.Fatalf("observability setup: %v", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := provs.Shutdown(shutdownCtx); err != nil {
+			log.Printf("observability shutdown: %v", err)
+		}
+	}()
+
+	metricsSrv := obs.MetricsServer(provs.Metrics, metricsAddr)
+	go func() {
+		log.Printf("gateway metrics listening on %s", metricsAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("metrics serve: %v", err)
+		}
+	}()
+	defer metricsSrv.Close() //nolint:errcheck // admin endpoint at exit
+
+	stockConn := dial(stockAddr, provs)
 	defer stockConn.Close()
-	resConn := dial(resAddr)
+	resConn := dial(resAddr, provs)
 	defer resConn.Close()
-	orderConn := dial(orderAddr)
+	orderConn := dial(orderAddr, provs)
 	defer orderConn.Close()
 
 	core := &gateway.Core{
@@ -40,6 +70,9 @@ func main() {
 		ReservationBreaker: circuitbreaker.New(circuitbreaker.Config{}),
 		OrderBreaker:       circuitbreaker.New(circuitbreaker.Config{}),
 	}
+	// Fail-Fast breaker visibility (spec #44): publish each dependency's
+	// breaker state as the taper_breaker_state gauge.
+	core.BreakerGauge = provs.Metrics
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -56,8 +89,10 @@ func main() {
 	}
 }
 
-func dial(addr string) *grpc.ClientConn {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+func dial(addr string, provs *obs.Providers) *grpc.ClientConn {
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {
 		log.Fatalf("dial %s: %v", addr, err)
 	}

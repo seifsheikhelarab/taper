@@ -12,6 +12,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -75,8 +76,19 @@ func Setup(ctx context.Context, cfg Config) (*Providers, error) {
 		return p, nil
 	}
 
+	// Accept standard OTel endpoint values (http://host:port). The OTLP
+	// gRPC exporter wants a bare host:port and this build exports
+	// insecure (dev default): strip the scheme, warn on https.
+	endpoint := cfg.OTLPEndpoint
+	if i := strings.Index(endpoint, "://"); i >= 0 {
+		if endpoint[:i] == "https" {
+			log.Printf("observability: https OTLP endpoint %q needs TLS; exporting insecure instead", cfg.OTLPEndpoint)
+		}
+		endpoint = endpoint[i+3:]
+	}
+
 	traceExp, err := otlptracegrpc.New(ctx,
-		otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint),
+		otlptracegrpc.WithEndpoint(endpoint),
 		otlptracegrpc.WithInsecure())
 	if err != nil {
 		return nil, err
@@ -88,7 +100,7 @@ func Setup(ctx context.Context, cfg Config) (*Providers, error) {
 	p.shutdowns = append(p.shutdowns, tp.Shutdown)
 
 	metricExp, err := otlpmetricgrpc.New(ctx,
-		otlpmetricgrpc.WithEndpoint(cfg.OTLPEndpoint),
+		otlpmetricgrpc.WithEndpoint(endpoint),
 		otlpmetricgrpc.WithInsecure())
 	if err != nil {
 		return nil, err
@@ -127,6 +139,29 @@ func Propagator() propagation.TextMapPropagator { return otel.GetTextMapPropagat
 // RPCName normalizes a gRPC full method ("/pkg.Svc/Method") to the RED
 // metric label form "pkg.Svc/Method".
 func RPCName(fullMethod string) string { return strings.TrimPrefix(fullMethod, "/") }
+
+// Traceparent returns the W3C traceparent for ctx's span context in the
+// exact "00-<traceid>-<spanid>-<flags>" form, or "" when there is no valid
+// span. Services store it in the outbox traceparent column so Debezium's
+// EventRouter promotes it to a Kafka header and consumers join the trace.
+func Traceparent(ctx context.Context) string {
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("00-")
+	b.WriteString(sc.TraceID().String())
+	b.WriteString("-")
+	b.WriteString(sc.SpanID().String())
+	b.WriteString("-")
+	if sc.IsSampled() {
+		b.WriteString("01")
+	} else {
+		b.WriteString("00")
+	}
+	return b.String()
+}
 
 // UnaryServerInterceptor extracts W3C trace context from incoming gRPC
 // metadata, opens a server span, and records RED metrics around the

@@ -106,6 +106,9 @@ type Core struct {
 	StockBreaker       *circuitbreaker.Breaker
 	ReservationBreaker *circuitbreaker.Breaker
 	OrderBreaker       *circuitbreaker.Breaker
+	// BreakerGauge, when set, observes breaker transitions so the
+	// Fail-Fast Policy is visible (Prometheus taper_breaker_state).
+	BreakerGauge BreakerObserver
 }
 
 // authorize verifies the bearer token, enforcing the auth contract.
@@ -160,10 +163,17 @@ func (c *Core) decode(r *http.Request, claims auth.Claims, msg proto.Message) *h
 	return nil
 }
 
-// invoke runs one gRPC call through the backend breaker and writes either
-// the protojson response or the mapped error.
-func (c *Core) invoke(w http.ResponseWriter, r *http.Request, br *circuitbreaker.Breaker, call func(ctx context.Context) (proto.Message, error)) {
+// BreakerObserver consumes breaker state transitions (port so the gateway
+// stays decoupled from the metrics implementation).
+type BreakerObserver interface {
+	SetBreakerState(dependency, state string)
+}
+
+// invoke runs one gRPC call through the named dependency's breaker and
+// writes either the protojson response or the mapped error.
+func (c *Core) invoke(w http.ResponseWriter, r *http.Request, dep string, br *circuitbreaker.Breaker, call func(ctx context.Context) (proto.Message, error)) {
 	if err := br.Allow(); err != nil {
+		c.publishBreaker(dep, br)
 		(&httpError{status: http.StatusServiceUnavailable, code: "unavailable", message: err.Error()}).write(w)
 		return
 	}
@@ -179,11 +189,13 @@ func (c *Core) invoke(w http.ResponseWriter, r *http.Request, br *circuitbreaker
 		default:
 			br.RecordSuccess()
 		}
+		c.publishBreaker(dep, br)
 		httpErr := errorFromGRPC(err)
 		httpErr.write(w)
 		return
 	}
 	br.RecordSuccess()
+	c.publishBreaker(dep, br)
 	w.Header().Set("Content-Type", "application/json")
 	body, err := (protojson.MarshalOptions{}).Marshal(resp)
 	if err != nil {
@@ -191,6 +203,15 @@ func (c *Core) invoke(w http.ResponseWriter, r *http.Request, br *circuitbreaker
 		return
 	}
 	_, _ = w.Write(body)
+}
+
+// publishBreaker reports the breaker's state to the observer (the
+// Prometheus taper_breaker_state gauge in production; no-op when unset).
+func (c *Core) publishBreaker(dep string, br *circuitbreaker.Breaker) {
+	if c.BreakerGauge == nil || dep == "" {
+		return
+	}
+	c.BreakerGauge.SetBreakerState(dep, br.State())
 }
 
 // Middleware chains auth and rate limiting around the route mux. Every
