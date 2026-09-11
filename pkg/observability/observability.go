@@ -1,6 +1,6 @@
 // Package observability wires the Phase 5 hardening stack (spec #44):
-// OpenTelemetry tracing with W3C traceparent propagation, OTLP metric
-// export, and Prometheus RED metrics for the gRPC surface.
+// OpenTelemetry tracing with W3C traceparent propagation (OTLP trace
+// export) and Prometheus RED metrics for the gRPC surface.
 //
 // Services call Setup once at boot, chain UnaryServerInterceptor /
 // UnaryClientInterceptor into their gRPC servers and clients, and serve
@@ -23,10 +23,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -99,19 +97,10 @@ func Setup(ctx context.Context, cfg Config) (*Providers, error) {
 	otel.SetTracerProvider(tp)
 	p.shutdowns = append(p.shutdowns, tp.Shutdown)
 
-	metricExp, err := otlpmetricgrpc.New(ctx,
-		otlpmetricgrpc.WithEndpoint(endpoint),
-		otlpmetricgrpc.WithInsecure())
-	if err != nil {
-		return nil, err
-	}
-	mp := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp,
-			sdkmetric.WithInterval(15*time.Second))),
-		sdkmetric.WithResource(res))
-	otel.SetMeterProvider(mp)
-	p.shutdowns = append(p.shutdowns, mp.Shutdown)
-
+	// Metrics are served via Prometheus on each service's /metrics admin
+	// port; the OTLP metric exporter is deliberately not installed. Jaeger
+	// (the trace backend) rejects OTLP metrics with Unimplemented, and no
+	// second metrics backend exists to ship them to.
 	return p, nil
 }
 

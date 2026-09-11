@@ -151,5 +151,103 @@ services:
         done
         echo "connector registration complete"
 
+# ---------------------------------------------------------------------------
+# Service containers (opt-in, docs/research/0002): the five Go binaries as
+# distroless images. Off by default to keep the infra-only compose workflow;
+# run with:  docker compose --profile containers up -d
+# Host conflicts are avoided by publishing only the gateway (8080); internal
+# gRPC and metrics ports stay network-internal. No healthchecks here:
+# distroless has no shell — probe the gateway's /healthz instead.
+# ---------------------------------------------------------------------------
+  stock:
+    build:
+      context: .
+      args: { BIN: stock }
+    image: taper/stock
+    profiles: ["containers"]
+    environment:
+      STOCK_DATABASE_URL: postgres://taper_app:taperapp@postgres:5432/taper_db
+      STOCK_SWEEPER_DATABASE_URL: postgres://taper_sweeper:tapersweeper@postgres:5432/taper_db
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  reservation:
+    build:
+      context: .
+      args: { BIN: reservation }
+    image: taper/reservation
+    profiles: ["containers"]
+    environment:
+      RESERVATION_DATABASE_URL: postgres://taper_app:taperapp@postgres:5432/reservation_db
+      SWEEPER_DATABASE_URL: postgres://taper_sweeper:tapersweeper@postgres:5432/reservation_db
+      STOCK_ADDR: stock:50051
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      stock:
+        condition: service_started
+
+  order:
+    build:
+      context: .
+      args: { BIN: order }
+    image: taper/order
+    profiles: ["containers"]
+    environment:
+      ORDER_DATABASE_URL: postgres://taper_app:taperapp@postgres:5432/order_db
+      ORDER_SWEEPER_DATABASE_URL: postgres://taper_sweeper:tapersweeper@postgres:5432/order_db
+      RESERVATION_ADDR: reservation:50052
+      STOCK_ADDR: stock:50051
+      SAGA_RESUME_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      reservation:
+        condition: service_started
+      stock:
+        condition: service_started
+
+  fulfillment:
+    build:
+      context: .
+      args: { BIN: fulfillment }
+    image: taper/fulfillment
+    profiles: ["containers"]
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      STOCK_ADDR: stock:50051
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      stock:
+        condition: service_started
+
+  gateway:
+    build:
+      context: .
+      args: { BIN: gateway }
+    image: taper/gateway
+    profiles: ["containers"]
+    ports:
+      - "8080:8080"
+    environment:
+      GATEWAY_JWT_SECRET: taper-sandbox-secret
+      STOCK_ADDR: stock:50051
+      RESERVATION_ADDR: reservation:50052
+      ORDER_ADDR: order:50053
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    depends_on:
+      order:
+        condition: service_started
+      reservation:
+        condition: service_started
+      stock:
+        condition: service_started
+
 volumes:
   postgres_data:

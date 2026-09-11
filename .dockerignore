@@ -1,0 +1,13 @@
+# Build context: only Go source, gen/, and module files are needed.
+.git
+.github
+docs
+integration
+load
+scripts
+db
+.idea
+.vscode
+node_modules
+*.exe
+*.md
