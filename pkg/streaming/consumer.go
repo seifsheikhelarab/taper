@@ -76,10 +76,7 @@ type Consumer struct {
 	cfg    Config
 	reader *kafka.Reader
 	dlq    *kafka.Writer
-	// dlqSink overrides the Kafka DLQ writer (tests). When nil, deadLetter
-	// writes to the DLQ topic over Kafka.
-	dlqSink func(ctx context.Context, m kafka.Message) error
-	log     func(format string, args ...any)
+	log    func(format string, args ...any)
 }
 
 // NewConsumer builds a consumer for the topic in a consumer group.
@@ -177,20 +174,11 @@ func (c *Consumer) deadLetter(ctx context.Context, msg kafka.Message, cause erro
 	dlqMsg := kafka.Message{Key: msg.Key, Value: b}
 	// Surface the dead-letter marker to callers via a sentinel error so
 	// Run logs it and the offset commits (poison messages never block).
-	err = c.writeDLQ(ctx, dlqMsg)
+	err = c.dlq.WriteMessages(ctx, dlqMsg)
 	if err != nil {
 		return err
 	}
 	return fmt.Errorf("dead-lettered after %d attempts: %w", attempts, cause)
-}
-
-// writeDLQ publishes the envelope via the injected sink (tests) or the Kafka
-// DLQ writer.
-func (c *Consumer) writeDLQ(ctx context.Context, dlqMsg kafka.Message) error {
-	if c.dlqSink != nil {
-		return c.dlqSink(ctx, dlqMsg)
-	}
-	return c.dlq.WriteMessages(ctx, dlqMsg)
 }
 
 // Close releases the reader and DLQ writer.

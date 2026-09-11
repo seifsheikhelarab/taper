@@ -115,7 +115,11 @@ func TestKafkaStockEventStreaming(t *testing.T) {
 	if key != tenant+":"+sku {
 		t.Fatalf("expected composite partition key %s:%s, got %s", tenant, sku, key)
 	}
-	var ev streaming.OutboxEvent
+	var ev struct {
+		EventType   string          `json:"event_type"`
+		AggregateID string          `json:"aggregate_id"`
+		Payload     json.RawMessage `json:"payload"`
+	}
 	if err := json.Unmarshal(m.Value, &ev); err != nil {
 		t.Fatalf("decode event: %v", err)
 	}

@@ -16,9 +16,8 @@ via `pkg/observability`; no behavior changes when observability is off.
   - Kafka events: producers store the active traceparent in the outbox
     `traceparent` column; Debezium's EventRouter promotes it to a Kafka
     header (`additional.placement`); `pkg/streaming.Run` opens a consumer
-    span joined to the producer trace. Direct producers use
-    `streaming.HeaderInjector`. The traceparent survives the DLQ envelope
-    and `dlqreplay` re-publishes it.
+    span joined to the producer trace. The traceparent survives the DLQ
+    envelope and `dlqreplay` re-publishes it.
 - **Verify end to end**:
 
   ```bash

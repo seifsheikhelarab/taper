@@ -6,8 +6,6 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -23,29 +21,8 @@ func main() {
 	brokers := config.EnvOr("KAFKA_BROKERS", "localhost:29092")
 	metricsAddr := config.EnvOr("METRICS_ADDR", ":9105")
 
-	provs, err := obs.Setup(context.Background(), obs.Config{
-		ServiceName:  "channelsync",
-		OTLPEndpoint: config.EnvOr("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-	})
-	if err != nil {
-		log.Fatalf("observability setup: %v", err)
-	}
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := provs.Shutdown(shutdownCtx); err != nil {
-			log.Printf("observability shutdown: %v", err)
-		}
-	}()
-
-	metricsSrv := obs.MetricsServer(provs.Metrics, metricsAddr)
-	go func() {
-		log.Printf("channelsync metrics listening on %s", metricsAddr)
-		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("metrics serve: %v", err)
-		}
-	}()
-	defer metricsSrv.Close() //nolint:errcheck // admin endpoint at exit
+	_, stopObs := obs.MustRun("channelsync", metricsAddr)
+	defer stopObs()
 
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {

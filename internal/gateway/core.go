@@ -99,7 +99,7 @@ func errorFromGRPC(err error) *httpError {
 
 // Core carries the gateway's shared dependencies and per-backend breakers.
 type Core struct {
-	Verifier auth.TokenVerifier
+	Verifier *auth.Sandbox
 	Limiter  *ratelimit.Limiter
 	// One breaker per downstream service; an open breaker fails fast with
 	// 503 instead of queuing.

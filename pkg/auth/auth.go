@@ -1,7 +1,7 @@
-// Package auth abstracts token issuance and verification behind ports so
-// the gateway never depends on a specific identity provider. The sandbox
-// implementation signs HS256 JWTs carrying a tenant_id claim; a real IdP
-// adapter (RS256/JWKS) implements the same ports later.
+// Package auth implements the sandbox token issuer/verifier: HMAC-SHA256
+// over a compact base64url(payload) token carrying a tenant_id claim, so
+// local runs and integration tests have a working bearer-token flow.
+// Not an interoperable JWT wire format by design.
 package auth
 
 import (
@@ -28,21 +28,7 @@ type Claims struct {
 // Callers map it to HTTP 401 / gRPC unauthenticated.
 var ErrUnauthenticated = errors.New("unauthenticated")
 
-// TokenIssuer mints tokens for a tenant (sandbox/testing; a real IdP owns
-// issuance in production).
-type TokenIssuer interface {
-	Issue(ctx context.Context, tenantID string, ttl time.Duration) (string, error)
-}
-
-// TokenVerifier validates a presented token and returns its claims.
-type TokenVerifier interface {
-	Verify(ctx context.Context, token string) (Claims, error)
-}
-
-// Sandbox implements both ports with HMAC-SHA256 over a compact
-// base64url(payload) token. Not an interoperable JWT wire format by
-// design: it exists so integration tests and local runs have a working
-// issuer, and so the ports are proven sufficient.
+// Sandbox mints and verifies tokens with a shared HMAC secret.
 type Sandbox struct {
 	secret []byte
 	now    func() time.Time

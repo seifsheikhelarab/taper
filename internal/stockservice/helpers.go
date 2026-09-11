@@ -2,8 +2,6 @@ package stockservice
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"sort"
 
@@ -13,6 +11,7 @@ import (
 
 	stockdb "github.com/seifsheikhelarab/taper/gen/go/db/stock"
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
+	"github.com/seifsheikhelarab/taper/pkg/database"
 )
 
 // StockLocation identifies a unique stock position (tenant + SKU + warehouse).
@@ -20,12 +19,6 @@ type StockLocation struct {
 	TenantID    pgtype.UUID
 	SkuID       string
 	WarehouseID string
-}
-
-func payloadHash(msg proto.Message) string {
-	b, _ := proto.Marshal(msg)
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:])
 }
 
 // tryIdempotency reports whether the key was already processed (duplicate).
@@ -38,7 +31,7 @@ func tryIdempotency(ctx context.Context, q *stockdb.Queries, tenantID pgtype.UUI
 	_, err := q.CheckAndInsertIdempotencyKey(ctx, stockdb.CheckAndInsertIdempotencyKeyParams{
 		TenantID:       tenantID,
 		IdempotencyKey: key,
-		PayloadHash:    payloadHash(msg),
+		PayloadHash:    database.PayloadHash(msg),
 	})
 	if err == pgx.ErrNoRows {
 		return true, nil

@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"net"
-	"net/http"
 	"time"
 
 	"google.golang.org/grpc"
@@ -16,6 +15,7 @@ import (
 	"github.com/seifsheikhelarab/taper/internal/orderservice"
 	"github.com/seifsheikhelarab/taper/pkg/config"
 	"github.com/seifsheikhelarab/taper/pkg/database"
+	"github.com/seifsheikhelarab/taper/pkg/grpcx"
 	obs "github.com/seifsheikhelarab/taper/pkg/observability"
 	"github.com/seifsheikhelarab/taper/pkg/outboxprune"
 	"github.com/seifsheikhelarab/taper/pkg/payment"
@@ -30,29 +30,8 @@ func main() {
 	stockAddr := config.EnvOr("STOCK_ADDR", "localhost:50051")
 	metricsAddr := config.EnvOr("METRICS_ADDR", ":9103")
 
-	provs, err := obs.Setup(context.Background(), obs.Config{
-		ServiceName:  "order",
-		OTLPEndpoint: config.EnvOr("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-	})
-	if err != nil {
-		log.Fatalf("observability setup: %v", err)
-	}
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := provs.Shutdown(shutdownCtx); err != nil {
-			log.Printf("observability shutdown: %v", err)
-		}
-	}()
-
-	metricsSrv := obs.MetricsServer(provs.Metrics, metricsAddr)
-	go func() {
-		log.Printf("order metrics listening on %s", metricsAddr)
-		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("metrics serve: %v", err)
-		}
-	}()
-	defer metricsSrv.Close() //nolint:errcheck // admin endpoint at exit
+	provs, stopObs := obs.MustRun("order", metricsAddr)
+	defer stopObs()
 
 	pool, err := database.OpenPool(context.Background(), dsn)
 	if err != nil {
@@ -66,7 +45,9 @@ func main() {
 	}
 	defer sweeperPool.Close()
 
-	resConn, err := grpc.NewClient(resAddr,
+	// grpcx.Dial opts into client-side round_robin (docs/research/0002):
+	// saga steps are idempotency-keyed, so spreading across replicas is safe.
+	resConn, err := grpcx.Dial(resAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {
@@ -74,7 +55,7 @@ func main() {
 	}
 	defer resConn.Close()
 
-	stockConn, err := grpc.NewClient(stockAddr,
+	stockConn, err := grpcx.Dial(stockAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {

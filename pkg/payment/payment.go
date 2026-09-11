@@ -1,5 +1,5 @@
-// Package payment abstracts the payment gateway behind an interface so the
-// order saga can drive payments without coupling to a specific provider.
+// Package payment provides the deterministic sandbox payment gateway used
+// by the order saga.
 package payment
 
 import (
@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,13 +32,6 @@ type ChargeResult struct {
 	AuthorizedAt  time.Time
 }
 
-// Gateway is the payment provider boundary used by the order saga.
-type Gateway interface {
-	// Charge authorizes (and captures, for sandbox simplicity) a payment.
-	// Implementations must be idempotent for a given IdemKey.
-	Charge(ctx context.Context, req ChargeRequest) (*ChargeResult, error)
-}
-
 // Sandbox is a deterministic in-process gateway for local dev and tests.
 // It succeeds unless the request opts into failure via ForceFail, or the
 // TAPER_SANDBOX_FAIL_ORDERS env var lists the order id.
@@ -46,7 +40,8 @@ type Sandbox struct{}
 // NewSandbox returns a Sandbox gateway.
 func NewSandbox() *Sandbox { return &Sandbox{} }
 
-// Charge implements Gateway with deterministic sandbox behavior.
+// Charge authorizes (and captures, for sandbox simplicity) a payment.
+// It is idempotent for a given IdemKey.
 func (s *Sandbox) Charge(ctx context.Context, req ChargeRequest) (*ChargeResult, error) {
 	if req.Amount <= 0 {
 		return nil, fmt.Errorf("%w: amount must be positive", ErrPaymentDeclined)
@@ -67,24 +62,10 @@ func sandboxFailListed(orderID string) bool {
 	if v == "" {
 		return false
 	}
-	for _, id := range splitComma(v) {
+	for _, id := range strings.Split(v, ",") {
 		if id == orderID {
 			return true
 		}
 	}
 	return false
-}
-
-func splitComma(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i <= len(s); i++ {
-		if i == len(s) || s[i] == ',' {
-			if i > start {
-				out = append(out, s[start:i])
-			}
-			start = i + 1
-		}
-	}
-	return out
 }

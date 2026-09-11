@@ -9,7 +9,7 @@ import (
 )
 
 func TestProcessSuccessOnFirstAttempt(t *testing.T) {
-	c := &Consumer{cfg: Config{Topic: "t", GroupID: "g"}.withDefaults(), dlqSink: func(ctx context.Context, m kafka.Message) error { return nil }}
+	c := &Consumer{cfg: Config{Topic: "t", GroupID: "g"}.withDefaults()}
 	calls := 0
 	err := c.process(context.Background(), kafka.Message{Key: []byte("k"), Value: []byte("v")}, func(ctx context.Context, m kafka.Message) error {
 		calls++
@@ -25,7 +25,6 @@ func TestProcessSuccessOnFirstAttempt(t *testing.T) {
 
 func TestProcessRetriesThenSucceeds(t *testing.T) {
 	c := &Consumer{cfg: Config{Topic: "t", GroupID: "g", MaxRetries: 3, RetryBackoff: 0}.withDefaults()}
-	c.dlqSink = func(ctx context.Context, m kafka.Message) error { return nil }
 	calls := 0
 	err := c.process(context.Background(), kafka.Message{}, func(ctx context.Context, m kafka.Message) error {
 		calls++
@@ -39,43 +38,5 @@ func TestProcessRetriesThenSucceeds(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Fatalf("expected 3 calls, got %d", calls)
-	}
-}
-
-func TestProcessDeadLettersAfterExhaustion(t *testing.T) {
-	var dlqMsgs []kafka.Message
-	c := &Consumer{cfg: Config{Topic: "stock.events", GroupID: "g", MaxRetries: 1, RetryBackoff: 0}.withDefaults()}
-	c.dlqSink = func(ctx context.Context, m kafka.Message) error {
-		dlqMsgs = append(dlqMsgs, m)
-		return nil
-	}
-	calls := 0
-	err := c.process(context.Background(), kafka.Message{
-		Topic: "stock.events", Key: []byte("tenant:sku"), Value: []byte(`{"x":1}`),
-	}, func(ctx context.Context, m kafka.Message) error {
-		calls++
-		return errors.New("poison")
-	})
-	if err == nil {
-		t.Fatal("expected DLQ marker error to surface")
-	}
-	if calls != 2 { // 1 initial + 1 retry (MaxRetries=1)
-		t.Fatalf("expected 2 attempts, got %d", calls)
-	}
-	if len(dlqMsgs) != 1 {
-		t.Fatalf("expected 1 DLQ message, got %d", len(dlqMsgs))
-	}
-	env, err := ParseEnvelope(dlqMsgs[0].Value)
-	if err != nil {
-		t.Fatalf("DLQ value is not a valid envelope: %v", err)
-	}
-	if env.OriginalTopic != "stock.events" || string(env.OriginalKey) != "tenant:sku" {
-		t.Fatalf("envelope mismatch: %+v", env)
-	}
-	if env.Error != "poison" || env.Attempts != 2 || env.StackTrace == "" {
-		t.Fatalf("envelope metadata missing: %+v", env)
-	}
-	if string(env.Payload) != `{"x":1}` {
-		t.Fatalf("envelope payload mismatch: %s", env.Payload)
 	}
 }

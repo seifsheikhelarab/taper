@@ -75,7 +75,7 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 			TenantId:       k.tenant,
 			OrderId:        k.orderID,
 			Reason:         "ttl_expiry",
-			IdempotencyKey: compensationKey(k.tenant, k.orderID),
+			IdempotencyKey: database.CompensationKey(k.tenant, k.orderID),
 			Lines:          stockLines,
 		}); err != nil {
 			log.Printf("sweeper: release stock order %s: %v", k.orderID, err)

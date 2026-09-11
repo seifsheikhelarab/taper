@@ -75,7 +75,7 @@ func (s *Server) Reserve(ctx context.Context, req *resv1.ReserveRequest) (*resv1
 	expiresAt := time.Now().Add(ttl)
 	reservationID, err := s.insertReservations(ctx, tenantUUID, req, expiresAt)
 	if err != nil {
-		if errors.Is(err, errAlreadyReserved) {
+		if errors.Is(err, errAlreadyProcessed) {
 			// Idempotent replay: reservation already recorded, return cached id.
 			id := s.firstReservationID(ctx, tenantUUID, req.GetOrderId())
 			return &resv1.ReserveResponse{Success: true, ReservationId: id}, nil
@@ -86,7 +86,7 @@ func (s *Server) Reserve(ctx context.Context, req *resv1.ReserveRequest) (*resv1
 			TenantId:       req.GetTenantId(),
 			OrderId:        req.GetOrderId(),
 			Reason:         "reserve_failure",
-			IdempotencyKey: compensationKey(req.GetTenantId(), req.GetOrderId()),
+			IdempotencyKey: database.CompensationKey(req.GetTenantId(), req.GetOrderId()),
 			Lines:          stockLines,
 		})
 		return nil, status.Errorf(codes.Internal, "persist reservation: %v", err)
@@ -121,10 +121,10 @@ func (s *Server) insertReservations(ctx context.Context, tenantUUID pgtype.UUID,
 			_, err := q.CheckAndInsertIdempotencyKey(ctx, resdb.CheckAndInsertIdempotencyKeyParams{
 				TenantID:       tenantUUID,
 				IdempotencyKey: req.GetIdempotencyKey(),
-				PayloadHash:    hashPayload(req),
+				PayloadHash:    database.PayloadHash(req),
 			})
 			if err == pgx.ErrNoRows {
-				return errAlreadyReserved
+				return errAlreadyProcessed
 			}
 			if err != nil {
 				return err
@@ -177,10 +177,10 @@ func (s *Server) Release(ctx context.Context, req *resv1.ReleaseRequest) (*resv1
 			_, err := q.CheckAndInsertIdempotencyKey(ctx, resdb.CheckAndInsertIdempotencyKeyParams{
 				TenantID:       tenantUUID,
 				IdempotencyKey: req.GetIdempotencyKey(),
-				PayloadHash:    hashPayload(req),
+				PayloadHash:    database.PayloadHash(req),
 			})
 			if err == pgx.ErrNoRows {
-				return errAlreadyReleased
+				return errAlreadyProcessed
 			}
 			if err != nil {
 				return err
@@ -238,7 +238,7 @@ func (s *Server) Release(ctx context.Context, req *resv1.ReleaseRequest) (*resv1
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, errAlreadyReleased) {
+		if errors.Is(err, errAlreadyProcessed) {
 			return &resv1.ReleaseResponse{Success: true}, nil
 		}
 		return nil, status.Errorf(codes.Internal, "release: %v", err)
@@ -265,7 +265,7 @@ func (s *Server) AllocateReservation(ctx context.Context, req *resv1.AllocateRes
 			_, err := q.CheckAndInsertIdempotencyKey(ctx, resdb.CheckAndInsertIdempotencyKeyParams{
 				TenantID:       tenantUUID,
 				IdempotencyKey: req.GetIdempotencyKey(),
-				PayloadHash:    hashPayload(req),
+				PayloadHash:    database.PayloadHash(req),
 			})
 			if err == pgx.ErrNoRows {
 				// Already allocated - return success (idempotent).

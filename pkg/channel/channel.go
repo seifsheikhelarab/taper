@@ -1,6 +1,7 @@
-// Package channel abstracts external sales-channel integration behind ports
-// so the channelsync consumer can push availability and alerts without
-// coupling to a specific platform (Shopify/WooCommerce adapters come later).
+// Package channel provides the deterministic sandbox sales-channel adapter:
+// it records availability upserts and routes deficit alerts for local dev
+// and tests, until real platform integrations land (Shopify/WooCommerce
+// adapters are out of scope for now).
 package channel
 
 import (
@@ -28,14 +29,6 @@ type AvailabilityUpdate struct {
 	UpdatedAt    time.Time
 }
 
-// ChannelGateway is the external sales-channel boundary.
-type ChannelGateway interface {
-	// SetAvailability upserts the absolute sellable count for a SKU at a
-	// warehouse. Implementations should be idempotent per (tenant, sku,
-	// warehouse); last write wins under the stream's per-key ordering.
-	SetAvailability(ctx context.Context, u AvailabilityUpdate) error
-}
-
 // DeficitAlert reports an External Sync Adjustment clamped to zero
 // (CONTEXT.md: urgent deficit alert).
 type DeficitAlert struct {
@@ -46,12 +39,6 @@ type DeficitAlert struct {
 	Reason      string
 	Source      string
 	DetectedAt  time.Time
-}
-
-// NotificationGateway delivers urgent operational alerts.
-type NotificationGateway interface {
-	// NotifyDeficit routes a clamped-adjustment deficit alert.
-	NotifyDeficit(ctx context.Context, a DeficitAlert) error
 }
 
 // Sandbox is a deterministic in-process channel and notifier for local dev
@@ -67,7 +54,7 @@ type Sandbox struct {
 	alerts       []DeficitAlert
 }
 
-// NewSandbox returns a Sandbox implementing both ports.
+// NewSandbox returns a Sandbox channel/notifier.
 func NewSandbox(log func(format string, args ...any)) *Sandbox {
 	if log == nil {
 		log = func(string, ...any) {}
@@ -75,8 +62,9 @@ func NewSandbox(log func(format string, args ...any)) *Sandbox {
 	return &Sandbox{log: log, availability: map[string]AvailabilityUpdate{}}
 }
 
-// SetAvailability implements ChannelGateway with deterministic sandbox
-// behavior.
+// SetAvailability upserts the absolute sellable count for a SKU at a
+// warehouse. Idempotent per (tenant, sku, warehouse); sandbox is
+// deterministic in-process.
 func (s *Sandbox) SetAvailability(_ context.Context, u AvailabilityUpdate) error {
 	if u.AvailableQty < 0 {
 		return fmt.Errorf("availability must be non-negative, got %d", u.AvailableQty)
@@ -92,7 +80,7 @@ func (s *Sandbox) SetAvailability(_ context.Context, u AvailabilityUpdate) error
 	return nil
 }
 
-// NotifyDeficit implements NotificationGateway with deterministic sandbox
+// NotifyDeficit routes a clamped-adjustment deficit alert. Sandbox
 // behavior: structured log plus in-memory record.
 func (s *Sandbox) NotifyDeficit(_ context.Context, a DeficitAlert) error {
 	if sandboxFailListed(a.SKUID) {

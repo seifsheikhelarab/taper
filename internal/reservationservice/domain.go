@@ -10,12 +10,6 @@ const (
 	StatusExpired   = "EXPIRED"
 )
 
-// compensationKey generates a distinct idempotency key for compensation-release
-// calls so they are not treated as duplicates by the stock service.
-func compensationKey(tenantID, orderID string) string {
-	return "comp:" + tenantID + ":" + orderID
-}
-
 // partitionKey builds the Composite Partition Key (CONTEXT.md) used as the
 // outbox aggregate id: tenant_id:entity_id. Debezium keys Kafka messages by
 // this value, guaranteeing per-entity ordering while balancing partitions.

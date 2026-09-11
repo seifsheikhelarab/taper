@@ -35,7 +35,7 @@ type Saga struct {
 	sweeperPool  *pgxpool.Pool // BYPASSRLS role for cross-tenant resume scans
 	reservations resv1.ReservationServiceClient
 	stock        stockv1.StockServiceClient
-	gateway      payment.Gateway
+	gateway      *payment.Sandbox
 	defaultTTL   time.Duration
 	// Fail-Fast Policy: fail immediately when downstream deps are down.
 	resBreaker   *circuitbreaker.Breaker
@@ -43,7 +43,7 @@ type Saga struct {
 	stockBreaker *circuitbreaker.Breaker
 }
 
-func NewSaga(pool *pgxpool.Pool, sweeperPool *pgxpool.Pool, res resv1.ReservationServiceClient, stock stockv1.StockServiceClient, gw payment.Gateway) *Saga {
+func NewSaga(pool *pgxpool.Pool, sweeperPool *pgxpool.Pool, res resv1.ReservationServiceClient, stock stockv1.StockServiceClient, gw *payment.Sandbox) *Saga {
 	return &Saga{
 		pool:         pool,
 		sweeperPool:  sweeperPool,
@@ -422,7 +422,7 @@ func (s *Saga) FulfillOrder(ctx context.Context, req *orderv1.FulfillOrderReques
 			if err != nil {
 				return err
 			}
-			if storedHash != hashPayload(req) {
+			if storedHash != database.PayloadHash(req) {
 				return status.Errorf(codes.FailedPrecondition, "order %s is already FULFILLED (payload mismatch)", req.GetOrderId())
 			}
 			resp = &orderv1.FulfillOrderResponse{Success: true, Status: OrderFulfilled}
@@ -435,7 +435,7 @@ func (s *Saga) FulfillOrder(ctx context.Context, req *orderv1.FulfillOrderReques
 			if _, err := q.CheckAndInsertIdempotencyKey(ctx, orderdb.CheckAndInsertIdempotencyKeyParams{
 				TenantID:       tenantUUID,
 				IdempotencyKey: req.GetIdempotencyKey(),
-				PayloadHash:    hashPayload(req),
+				PayloadHash:    database.PayloadHash(req),
 			}); errors.Is(err, pgx.ErrNoRows) {
 				// Key already recorded: only a genuine fulfillment replay
 				// (same payload hash) is a no-op success; a cross-RPC key
@@ -447,7 +447,7 @@ func (s *Saga) FulfillOrder(ctx context.Context, req *orderv1.FulfillOrderReques
 				if gerr != nil {
 					return gerr
 				}
-				if storedHash == hashPayload(req) {
+				if storedHash == database.PayloadHash(req) {
 					resp = &orderv1.FulfillOrderResponse{Success: true, Status: OrderFulfilled}
 					return nil
 				}
@@ -506,7 +506,7 @@ func (s *Saga) compensate(ctx context.Context, tenantID, orderID, reason string)
 		TenantId:       tenantID,
 		OrderId:        orderID,
 		Reason:         reason,
-		IdempotencyKey: compensationKey(tenantID, orderID),
+		IdempotencyKey: database.CompensationKey(tenantID, orderID),
 	}); err != nil {
 		return fmt.Errorf("release: %w", err)
 	}
@@ -592,7 +592,7 @@ func (s *Saga) createOrderRow(ctx context.Context, tenantUUID pgtype.UUID, req *
 			_, err := q.CheckAndInsertIdempotencyKey(ctx, orderdb.CheckAndInsertIdempotencyKeyParams{
 				TenantID:       tenantUUID,
 				IdempotencyKey: req.GetIdempotencyKey(),
-				PayloadHash:    hashPayload(req),
+				PayloadHash:    database.PayloadHash(req),
 			})
 			if errors.Is(err, pgx.ErrNoRows) {
 				return errIdempotentReplay

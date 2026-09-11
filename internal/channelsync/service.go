@@ -23,13 +23,13 @@ import (
 // transaction as the projection write, so redelivery is a no-op.
 type Service struct {
 	pool     *pgxpool.Pool
-	channels channel.ChannelGateway
-	notifier channel.NotificationGateway
+	channels *channel.Sandbox
+	notifier *channel.Sandbox
 	log      func(format string, args ...any)
 }
 
 // New builds the channelsync reactor.
-func New(pool *pgxpool.Pool, channels channel.ChannelGateway, notifier channel.NotificationGateway, log func(format string, args ...any)) *Service {
+func New(pool *pgxpool.Pool, channels *channel.Sandbox, notifier *channel.Sandbox, log func(format string, args ...any)) *Service {
 	if log == nil {
 		log = func(string, ...any) {}
 	}

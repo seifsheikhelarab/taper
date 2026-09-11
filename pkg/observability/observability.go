@@ -14,7 +14,9 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -113,6 +115,40 @@ func (p *Providers) Shutdown(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// MustRun boots observability for one service binary: Setup with the
+// service's name and the OTEL_EXPORTER_OTLP_ENDPOINT env (empty = no-op
+// providers), serves the Prometheus metrics endpoint on metricsAddr, and
+// returns a cleanup func that closes the metrics server and flushes traces.
+// Call cleanup via defer; main's runtime is the metrics server lifecycle.
+func MustRun(service, metricsAddr string) (*Providers, func()) {
+	provs, err := Setup(context.Background(), Config{
+		ServiceName:  service,
+		OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+	})
+	if err != nil {
+		log.Fatalf("observability setup: %v", err)
+	}
+	metricsSrv := MetricsServer(provs.Metrics, metricsAddr)
+	go func() {
+		log.Printf("%s metrics listening on %s", service, metricsAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("metrics serve: %v", err)
+		}
+	}()
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			_ = metricsSrv.Close() //nolint:errcheck // admin endpoint at exit
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := provs.Shutdown(shutdownCtx); err != nil {
+				log.Printf("observability shutdown: %v", err)
+			}
+		})
+	}
+	return provs, cleanup
 }
 
 // Tracer returns a named tracer from the global provider. Consumer loops,

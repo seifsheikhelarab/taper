@@ -4,8 +4,6 @@ import (
 	"context"
 	"log"
 	"net"
-	"net/http"
-	"time"
 
 	"google.golang.org/grpc"
 
@@ -25,29 +23,8 @@ func main() {
 	sweeperDSN := config.EnvOr("STOCK_SWEEPER_DATABASE_URL", "postgres://taper_sweeper:tapersweeper@localhost:5432/taper_db")
 	metricsAddr := config.EnvOr("METRICS_ADDR", ":9101")
 
-	provs, err := obs.Setup(context.Background(), obs.Config{
-		ServiceName:  "stock",
-		OTLPEndpoint: config.EnvOr("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-	})
-	if err != nil {
-		log.Fatalf("observability setup: %v", err)
-	}
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := provs.Shutdown(shutdownCtx); err != nil {
-			log.Printf("observability shutdown: %v", err)
-		}
-	}()
-
-	metricsSrv := obs.MetricsServer(provs.Metrics, metricsAddr)
-	go func() {
-		log.Printf("stock metrics listening on %s", metricsAddr)
-		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("metrics serve: %v", err)
-		}
-	}()
-	defer metricsSrv.Close() //nolint:errcheck // admin endpoint at exit
+	provs, stopObs := obs.MustRun("stock", metricsAddr)
+	defer stopObs()
 
 	pool, err := database.OpenPool(context.Background(), dsn)
 	if err != nil {

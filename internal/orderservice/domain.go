@@ -18,9 +18,3 @@ const (
 	OrderCompensated = "COMPENSATED"
 	OrderFailed      = "FAILED"
 )
-
-// compensationKey matches the Phase 1 convention (internal/reservationservice/domain.go)
-// so compensation releases are not suppressed as duplicate idempotency keys.
-func compensationKey(tenantID, orderID string) string {
-	return "comp:" + tenantID + ":" + orderID
-}

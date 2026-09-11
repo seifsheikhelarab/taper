@@ -8,19 +8,14 @@ import (
 )
 
 // StartFromEnv starts the worker in a background goroutine when
-// OUTBOX_PRUNE_ENABLED is truthy. Interval/retention/batch size are tunable
-// via OUTBOX_PRUNE_INTERVAL, OUTBOX_PRUNE_RETENTION, OUTBOX_PRUNE_BATCH_SIZE.
-// Returns the Worker and a cancel func (no-op when disabled).
-func StartFromEnv(ctx context.Context, pool *pgxpool.Pool, log func(format string, args ...any)) (*Worker, func()) {
+// OUTBOX_PRUNE_ENABLED is truthy; otherwise it is a no-op. Interval is
+// tunable via OUTBOX_PRUNE_INTERVAL.
+func StartFromEnv(ctx context.Context, pool *pgxpool.Pool, log func(format string, args ...any)) {
 	if !config.EnvBool("OUTBOX_PRUNE_ENABLED") {
-		return nil, func() {}
+		return
 	}
-	cfg := Config{
-		Interval:  config.EnvDuration("OUTBOX_PRUNE_INTERVAL", 0),
-		Retention: config.EnvDuration("OUTBOX_PRUNE_RETENTION", 0),
-		BatchSize: config.EnvInt("OUTBOX_PRUNE_BATCH_SIZE", 0),
-	}
-	w := New(pool, cfg, log)
+	w := New(pool, Config{
+		Interval: config.EnvDuration("OUTBOX_PRUNE_INTERVAL", 0),
+	}, log)
 	go w.Run(ctx)
-	return w, func() {}
 }
