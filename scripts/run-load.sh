@@ -29,7 +29,7 @@ command -v docker >/dev/null || { echo "docker required" >&2; exit 1; }
 echo "== building binaries =="
 tmp="$(mktemp -d)"
 trap 'kill ${pids[*]} 2>/dev/null || true; rm -rf "$tmp"' EXIT
-go build -o "$tmp" ./cmd/stock ./cmd/reservation ./cmd/order ./cmd/gateway
+go build -o "$tmp" ./cmd/stock ./cmd/reservation ./cmd/order ./cmd/fulfillment ./cmd/gateway
 
 pg="localhost:${pg_port}"
 echo "== starting stack (postgres at ${pg}) =="
@@ -44,6 +44,10 @@ pids+=($!)
 ORDER_DATABASE_URL="postgres://taper_app:taperapp@${pg}/order_db" \
   ORDER_SWEEPER_DATABASE_URL="postgres://taper_sweeper:tapersweeper@${pg}/order_db" \
   RESERVATION_ADDR=localhost:50052 STOCK_ADDR=localhost:50051 "$tmp/order" &
+pids+=($!)
+# The fulfillment consumer drives CONFIRMED: without it scenario B's saga
+# follow-up GET would hang in ALLOCATED forever.
+KAFKA_BROKERS=localhost:29092 STOCK_ADDR=localhost:50051 "$tmp/fulfillment" &
 pids+=($!)
 GATEWAY_RATE_PER_TENANT=500 GATEWAY_BURST_PER_TENANT=1000 \
   GATEWAY_JWT_SECRET="$secret" STOCK_ADDR=localhost:50051 \
