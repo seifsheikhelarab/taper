@@ -141,37 +141,50 @@ func TestClientInterceptorInjectsTraceparentAndObserves(t *testing.T) {
 	}
 }
 
-func TestRoundTripServerJoinClientTrace(t *testing.T) {
+func TestRoundTripServerJoinsClientTrace(t *testing.T) {
 	sr := recordingSetup(t)
 	p := &Providers{Metrics: NewMetrics()}
 
-	// Client side: span + inject into metadata.
-	ctx, span := Tracer("test").Start(context.Background(), "client")
-	var outMD metadata.MD
+	// Client side: span + inject traceparent into outgoing metadata.
+	ctx, clientSpan := Tracer("test").Start(context.Background(), "client")
+	var wire metadata.MD
+	var injectedSC trace.SpanContext
 	_ = p.UnaryClientInterceptor()(ctx, "/order.v1.OrderService/CreateOrder", nil, nil, nil,
 		func(ctx context.Context, method string, req, reply any,
 			cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+			wire, _ = metadata.FromOutgoingContext(ctx)
+			// The interceptor's own client span is what gets injected.
+			injectedSC = trace.SpanContextFromContext(ctx)
 			return nil
 		})
-	span.End()
-	_ = outMD // injection verified in the other test; here we verify server joins.
+	clientSpan.End()
 
-	// Simulate the wire: outgoing metadata becomes incoming metadata.
-	_, clientSpan := Tracer("test").Start(context.Background(), "wire")
-	defer clientSpan.End()
-	inCtx := metadata.NewIncomingContext(context.Background(), metadata.MD{})
-	srv := p.UnaryServerInterceptor()
-	_, _ = srv(inCtx, nil, &grpc.UnaryServerInfo{FullMethod: "/x/y"},
+	// Simulate the wire: the client's outgoing metadata becomes the
+	// server's incoming metadata on the other process.
+	inCtx := metadata.NewIncomingContext(context.Background(), wire)
+	_, _ = p.UnaryServerInterceptor()(inCtx, nil,
+		&grpc.UnaryServerInfo{FullMethod: "/order.v1.OrderService/CreateOrder"},
 		func(ctx context.Context, req any) (any, error) {
 			return nil, nil
 		})
 
 	spans := sr.Ended()
-	if len(spans) < 1 {
-		t.Fatalf("expected spans, got %d", len(spans))
+	var serverSpan sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		if s.SpanKind() == trace.SpanKindServer {
+			serverSpan = s
+		}
 	}
-	if !spans[len(spans)-1].SpanContext().IsValid() {
-		t.Error("server span must carry a real trace ID")
+	if serverSpan == nil {
+		t.Fatal("no server span recorded")
+	}
+	if serverSpan.SpanContext().TraceID() != clientSpan.SpanContext().TraceID() {
+		t.Errorf("server trace %s != client trace %s (round trip broken)",
+			serverSpan.SpanContext().TraceID(), clientSpan.SpanContext().TraceID())
+	}
+	if serverSpan.Parent().SpanID() != injectedSC.SpanID() {
+		t.Errorf("server span parent %s != injected client span %s (server did not join the client trace)",
+			serverSpan.Parent().SpanID(), injectedSC.SpanID())
 	}
 }
 
