@@ -51,18 +51,24 @@ export default function () {
       expectStatus(r, 200, 'create') || r.status === 409 || r.status === 400,
   });
 
-  // Confirm the terminal state on the happy path.
+  // Confirm the terminal state on the happy path. CONFIRMED arrives via
+  // outbox -> Debezium -> Kafka -> fulfillment consumer, so poll like a
+  // real client instead of racing the pipeline with one immediate GET.
   if (created && create.status === 200) {
-    const get = http.get(`${base}/v1/orders/${orderId}`, H);
-    check(get, {
-      'saga CONFIRMED': (r) => {
-        if (r.status !== 200) return false;
+    let confirmed = false;
+    for (let i = 0; i < 10 && !confirmed; i++) {
+      const get = http.get(`${base}/v1/orders/${orderId}`, H);
+      if (get.status === 200) {
         try {
-          return JSON.parse(r.body).sagaState === 'CONFIRMED';
+          confirmed = JSON.parse(get.body).sagaState === 'CONFIRMED';
         } catch {
-          return false;
+          confirmed = false;
         }
-      },
+      }
+      if (!confirmed) sleep(0.5);
+    }
+    check({ confirmed }, {
+      'saga CONFIRMED': (s) => s.confirmed,
     });
   }
   sleep(0.01);

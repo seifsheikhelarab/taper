@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -15,6 +14,7 @@ import (
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 	"github.com/seifsheikhelarab/taper/internal/reservationservice"
 	"github.com/seifsheikhelarab/taper/pkg/config"
+	"github.com/seifsheikhelarab/taper/pkg/database"
 	obs "github.com/seifsheikhelarab/taper/pkg/observability"
 	"github.com/seifsheikhelarab/taper/pkg/outboxprune"
 )
@@ -51,13 +51,13 @@ func main() {
 	}()
 	defer metricsSrv.Close() //nolint:errcheck // admin endpoint at exit
 
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := database.OpenPool(ctx, dsn)
 	if err != nil {
 		log.Fatalf("connect db: %v", err)
 	}
 	defer pool.Close()
 
-	sweeperPool, err := pgxpool.New(ctx, sweeperDSN)
+	sweeperPool, err := database.OpenPool(ctx, sweeperDSN)
 	if err != nil {
 		log.Fatalf("connect sweeper db: %v", err)
 	}

@@ -90,11 +90,39 @@ regardless of how pretty the latency numbers were.
 
 ## Results
 
-Record one block per run (scenario, RATE, date, commit):
+First recorded runs (2026-09-11, commit with `feat(load): spread-SKU mode`,
+Windows 11 + Docker Desktop, Postgres container on the 5433 secondary port,
+`SPREAD_SKUS=50`, 60s each, all five binaries local, `synchronous_commit=on`):
 
 | Scenario | Rate | p50 | p95 | p99 | Errors | Oversell audit |
 |---|---|---|---|---|---|---|
-| _pending first recorded run_ | | | | | | |
+| A: reserve path | 50 rps | 129ms | 1.55s | 3.51s | 0% | PASS (0 rows) |
+| B: full saga | 20 rps | 199ms | 1.27s | 1.58s | 0% (sagas 100% CONFIRMED) | PASS (0 rows) |
 
-The spec's goal is **p99 < 100ms** on the reservation path at low-hundreds
-rps. Latency numbers without the oversell audit column are not results.
+Overload reference (same stack, 200 rps demanded): after the pool fix below
+the system delivered ~117 rps with **0% errors** and p50 ≈ 2.1s; demand above
+the fsync-bound ceiling turns into queueing latency, not failed requests —
+and the no-oversell audit still passed during the pathological 78%-deadline-
+abort run recorded before the fix.
+
+### What the numbers actually measure
+
+- **The bottleneck is Postgres commit fsync on the Docker Desktop VM disk,
+  not application code.** Isolation probe at the same 50 rps with
+  `synchronous_commit=off` (reverted immediately after): p50 129ms →
+  **7.15ms**, p95 1.55s → **21.55ms**. Sequential reserves are ~40–50ms;
+  a raw pgx ping over the same path is ~1.4ms.
+- **pgx's default pool ceiling was a real bug found by these runs**:
+  `pgxpool.New` sizes `MaxConns = max(4, numCPU)` = 8, capping stock at
+  ~58 rps with seconds of `Acquire` queueing. Fixed by `database.OpenPool`
+  (explicit 32, `DB_POOL_MAX_CONNS` override); capacity doubled.
+- **Single-SKU mode is physics, not a defect**: one `SELECT FOR UPDATE` row
+  serializes its transactions (~20–25 rps/row ceiling). Use `SPREAD_SKUS=1`
+  only to measure that ceiling.
+- The spec's p99 < 100ms goal is **not met on this Docker-Desktop-for-Windows
+  environment** because every commit pays VM-disk fsync latency under
+  concurrency. Re-record on Linux (native or WSL2 backend) before judging
+  the application against the goal; the fsync probe above bounds the app's
+  own contribution at roughly the 7ms/22ms class.
+
+Latency numbers without the oversell audit column are not results.
