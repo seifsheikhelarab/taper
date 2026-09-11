@@ -39,6 +39,7 @@ type Outbox struct {
 	EventType     string
 	Payload       []byte
 	CreatedAt     pgtype.Timestamptz
+	Traceparent   pgtype.Text
 }
 
 type ProcessedIdempotencyKey struct {

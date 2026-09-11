@@ -2,6 +2,7 @@ package reservationservice
 
 import (
 	"context"
+	"github.com/seifsheikhelarab/taper/pkg/database"
 	"log"
 	"time"
 
@@ -101,6 +102,7 @@ func (s *Sweeper) markExpired(ctx context.Context, r resdb.Reservation) {
 		AggregateID:   partitionKey(r.TenantID, r.OrderID),
 		EventType:     "reservation.expired",
 		Payload:       []byte(`{"order_id":"` + r.OrderID + `","sku_id":"` + r.SkuID + `"}`),
+		Traceparent:   database.TraceparentText(ctx),
 	})
 	if err != nil {
 		log.Printf("sweeper: outbox expired %s: %v", r.ID.String(), err)

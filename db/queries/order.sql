@@ -80,9 +80,10 @@ INSERT INTO outbox (
     aggregate_type,
     aggregate_id,
     event_type,
-    payload
+    payload,
+    traceparent
 ) VALUES (
-    $1, $2, $3, $4, $5
+    $1, $2, $3, $4, $5, $6
 )
 RETURNING *;
 

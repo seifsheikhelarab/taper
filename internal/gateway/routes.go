@@ -27,7 +27,7 @@ func (c *Core) claims(w http.ResponseWriter, r *http.Request) (auth.Claims, bool
 // breaker-guarded gRPC call, writing protojson or the mapped error.
 // The call wrapper must return proto.Message explicitly; grpc-go client
 // methods have concrete return types and are not directly assignable.
-func route[P proto.Message](c *Core, br *circuitbreaker.Breaker, mk func() P, call func(context.Context, P) (proto.Message, error)) http.HandlerFunc {
+func route[P proto.Message](c *Core, dep string, br *circuitbreaker.Breaker, mk func() P, call func(context.Context, P) (proto.Message, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := c.claims(w, r)
 		if !ok {
@@ -38,7 +38,7 @@ func route[P proto.Message](c *Core, br *circuitbreaker.Breaker, mk func() P, ca
 			he.write(w)
 			return
 		}
-		c.invoke(w, r, br, func(ctx context.Context) (proto.Message, error) {
+		c.invoke(w, r, dep, br, func(ctx context.Context) (proto.Message, error) {
 			return call(ctx, req)
 		})
 	}
@@ -59,32 +59,32 @@ func NewStockRoutes(core *Core, cc *grpc.ClientConn) *StockRoutes {
 func (s *StockRoutes) Mount(mux *http.ServeMux) {
 	c, br := s.core, s.core.StockBreaker
 	cl := s.client
-	mux.HandleFunc("POST /v1/stock/adjust", route(c, br,
+	mux.HandleFunc("POST /v1/stock/adjust", route(c, "stock", br,
 		func() *stockv1.AdjustStockRequest { return &stockv1.AdjustStockRequest{} },
 		func(ctx context.Context, req *stockv1.AdjustStockRequest) (proto.Message, error) {
 			return cl.AdjustStock(ctx, req)
 		}))
-	mux.HandleFunc("POST /v1/stock/reserve", route(c, br,
+	mux.HandleFunc("POST /v1/stock/reserve", route(c, "stock", br,
 		func() *stockv1.ReserveStockRequest { return &stockv1.ReserveStockRequest{} },
 		func(ctx context.Context, req *stockv1.ReserveStockRequest) (proto.Message, error) {
 			return cl.ReserveStock(ctx, req)
 		}))
-	mux.HandleFunc("POST /v1/stock/release", route(c, br,
+	mux.HandleFunc("POST /v1/stock/release", route(c, "stock", br,
 		func() *stockv1.ReleaseStockRequest { return &stockv1.ReleaseStockRequest{} },
 		func(ctx context.Context, req *stockv1.ReleaseStockRequest) (proto.Message, error) {
 			return cl.ReleaseStock(ctx, req)
 		}))
-	mux.HandleFunc("POST /v1/stock/allocate", route(c, br,
+	mux.HandleFunc("POST /v1/stock/allocate", route(c, "stock", br,
 		func() *stockv1.ConfirmStockAllocationRequest { return &stockv1.ConfirmStockAllocationRequest{} },
 		func(ctx context.Context, req *stockv1.ConfirmStockAllocationRequest) (proto.Message, error) {
 			return cl.ConfirmStockAllocation(ctx, req)
 		}))
-	mux.HandleFunc("POST /v1/stock/fulfill", route(c, br,
+	mux.HandleFunc("POST /v1/stock/fulfill", route(c, "stock", br,
 		func() *stockv1.FulfillStockRequest { return &stockv1.FulfillStockRequest{} },
 		func(ctx context.Context, req *stockv1.FulfillStockRequest) (proto.Message, error) {
 			return cl.FulfillStock(ctx, req)
 		}))
-	mux.HandleFunc("POST /v1/stock/unlock", route(c, br,
+	mux.HandleFunc("POST /v1/stock/unlock", route(c, "stock", br,
 		func() *stockv1.UnlockStockForAuditRequest { return &stockv1.UnlockStockForAuditRequest{} },
 		func(ctx context.Context, req *stockv1.UnlockStockForAuditRequest) (proto.Message, error) {
 			return cl.UnlockStockForAudit(ctx, req)
@@ -106,17 +106,17 @@ func NewReservationRoutes(core *Core, cc *grpc.ClientConn) *ReservationRoutes {
 func (s *ReservationRoutes) Mount(mux *http.ServeMux) {
 	c, br := s.core, s.core.ReservationBreaker
 	cl := s.client
-	mux.HandleFunc("POST /v1/reservations", route(c, br,
+	mux.HandleFunc("POST /v1/reservations", route(c, "reservation", br,
 		func() *reservationv1.ReserveRequest { return &reservationv1.ReserveRequest{} },
 		func(ctx context.Context, req *reservationv1.ReserveRequest) (proto.Message, error) {
 			return cl.Reserve(ctx, req)
 		}))
-	mux.HandleFunc("POST /v1/reservations/release", route(c, br,
+	mux.HandleFunc("POST /v1/reservations/release", route(c, "reservation", br,
 		func() *reservationv1.ReleaseRequest { return &reservationv1.ReleaseRequest{} },
 		func(ctx context.Context, req *reservationv1.ReleaseRequest) (proto.Message, error) {
 			return cl.Release(ctx, req)
 		}))
-	mux.HandleFunc("POST /v1/reservations/allocate", route(c, br,
+	mux.HandleFunc("POST /v1/reservations/allocate", route(c, "reservation", br,
 		func() *reservationv1.AllocateReservationRequest { return &reservationv1.AllocateReservationRequest{} },
 		func(ctx context.Context, req *reservationv1.AllocateReservationRequest) (proto.Message, error) {
 			return cl.AllocateReservation(ctx, req)

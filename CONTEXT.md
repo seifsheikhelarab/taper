@@ -71,3 +71,19 @@ _Avoid_: Tenant-only partition key
 **Tenant**:
 A distinct client entity whose data and requests are isolated using PostgreSQL Row-Level Security.
 _Avoid_: Account, client, customer workspace
+
+**Trace Context**:
+The W3C traceparent (`pkg/observability`) propagated through gRPC metadata between services and through the outbox `traceparent` column → Debezium header → Kafka consumer, so one distributed trace spans gateway → order → reservation → stock → consumer.
+_Avoid_: Correlation ID, request log ID
+
+**RED Metrics**:
+The per-service Prometheus metrics (rate, errors, duration + breaker state) served on a dedicated admin port (`METRICS_ADDR`), giving the Fail-Fast Policy a visible state.
+_Avoid_: Log scraping, in-process-only counters
+
+**Saga Resume**:
+The crash-recovery loop (`SAGA_RESUME_ENABLED`) re-driving non-terminal sagas (PENDING_PAYMENT/RESERVED) through idempotently keyed steps; the reservation TTL sweeper remains the independent backstop.
+_Avoid_: Manual retry queue, orphan sweep script
+
+**Unit Accounting**:
+The chaos and load invariant: after recovery and quiescence, `available + allocated == seeded` and `reserved == 0` — asserted by the chaos tests and `scripts/audit-oversell.sql`.
+_Avoid_: Stock balancing, inventory sync

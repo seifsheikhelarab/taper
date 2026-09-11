@@ -1,0 +1,327 @@
+// Package observability wires the Phase 5 hardening stack (spec #44):
+// OpenTelemetry tracing with W3C traceparent propagation, OTLP metric
+// export, and Prometheus RED metrics for the gRPC surface.
+//
+// Services call Setup once at boot, chain UnaryServerInterceptor /
+// UnaryClientInterceptor into their gRPC servers and clients, and serve
+// Metrics.Handler() on a dedicated admin port. With no OTLPEndpoint the
+// providers run in no-op mode (never-sampled spans) so local runs without
+// Jaeger still propagate valid trace context downstream.
+package observability
+
+import (
+	"context"
+	"errors"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+)
+
+// Config tunes observability for one service binary.
+type Config struct {
+	// ServiceName labels every span and OTLP resource, e.g. "stock".
+	ServiceName string
+	// OTLPEndpoint is the OTLP gRPC collector host:port (e.g.
+	// "localhost:4317"). Empty disables exporters: spans are never
+	// sampled and metrics are not exported, but trace context still
+	// propagates.
+	OTLPEndpoint string
+}
+
+// Providers bundles the initialized observability stack for one binary.
+type Providers struct {
+	Metrics *Metrics
+
+	shutdowns []func(context.Context) error
+}
+
+// Setup initializes the global tracer/meter providers, the propagation
+// scheme (W3C traceparent + baggage) and RED metrics. Call Shutdown on
+// process exit to flush.
+func Setup(ctx context.Context, cfg Config) (*Providers, error) {
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{}, propagation.Baggage{}))
+
+	p := &Providers{Metrics: NewMetrics()}
+	res, err := resource.Merge(resource.Default(),
+		resource.NewSchemaless(attribute.String("service.name", cfg.ServiceName)))
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg.OTLPEndpoint == "" {
+		// No backend configured: keep valid span contexts so downstream
+		// services join the same trace, but never sample locally.
+		tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()))
+		otel.SetTracerProvider(tp)
+		p.shutdowns = append(p.shutdowns, tp.Shutdown)
+		return p, nil
+	}
+
+	// Accept standard OTel endpoint values (http://host:port). The OTLP
+	// gRPC exporter wants a bare host:port and this build exports
+	// insecure (dev default): strip the scheme, warn on https.
+	endpoint := cfg.OTLPEndpoint
+	if i := strings.Index(endpoint, "://"); i >= 0 {
+		if endpoint[:i] == "https" {
+			log.Printf("observability: https OTLP endpoint %q needs TLS; exporting insecure instead", cfg.OTLPEndpoint)
+		}
+		endpoint = endpoint[i+3:]
+	}
+
+	traceExp, err := otlptracegrpc.New(ctx,
+		otlptracegrpc.WithEndpoint(endpoint),
+		otlptracegrpc.WithInsecure())
+	if err != nil {
+		return nil, err
+	}
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(traceExp, sdktrace.WithBatchTimeout(2*time.Second)),
+		sdktrace.WithResource(res))
+	otel.SetTracerProvider(tp)
+	p.shutdowns = append(p.shutdowns, tp.Shutdown)
+
+	metricExp, err := otlpmetricgrpc.New(ctx,
+		otlpmetricgrpc.WithEndpoint(endpoint),
+		otlpmetricgrpc.WithInsecure())
+	if err != nil {
+		return nil, err
+	}
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp,
+			sdkmetric.WithInterval(15*time.Second))),
+		sdkmetric.WithResource(res))
+	otel.SetMeterProvider(mp)
+	p.shutdowns = append(p.shutdowns, mp.Shutdown)
+
+	return p, nil
+}
+
+// Shutdown flushes all exporters. Safe to call once at process exit.
+func (p *Providers) Shutdown(ctx context.Context) error {
+	var errs []error
+	for i := len(p.shutdowns) - 1; i >= 0; i-- {
+		if err := p.shutdowns[i](ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Tracer returns a named tracer from the global provider. Consumer loops,
+// sagas and handlers use this to add spans to the propagated trace.
+func Tracer(name string) trace.Tracer {
+	return otel.GetTracerProvider().Tracer(name)
+}
+
+// Propagator returns the global W3C propagator for non-gRPC carriers such
+// as Kafka headers.
+func Propagator() propagation.TextMapPropagator { return otel.GetTextMapPropagator() }
+
+// RPCName normalizes a gRPC full method ("/pkg.Svc/Method") to the RED
+// metric label form "pkg.Svc/Method".
+func RPCName(fullMethod string) string { return strings.TrimPrefix(fullMethod, "/") }
+
+// Traceparent returns the W3C traceparent for ctx's span context in the
+// exact "00-<traceid>-<spanid>-<flags>" form, or "" when there is no valid
+// span. Services store it in the outbox traceparent column so Debezium's
+// EventRouter promotes it to a Kafka header and consumers join the trace.
+func Traceparent(ctx context.Context) string {
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("00-")
+	b.WriteString(sc.TraceID().String())
+	b.WriteString("-")
+	b.WriteString(sc.SpanID().String())
+	b.WriteString("-")
+	if sc.IsSampled() {
+		b.WriteString("01")
+	} else {
+		b.WriteString("00")
+	}
+	return b.String()
+}
+
+// UnaryServerInterceptor extracts W3C trace context from incoming gRPC
+// metadata, opens a server span, and records RED metrics around the
+// handler. Chain it first so the span is a child of the remote context.
+func (p *Providers) UnaryServerInterceptor() grpc.UnaryServerInterceptor {
+	m := p.Metrics
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler) (any, error) {
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			ctx = Propagator().Extract(ctx, mdCarrier{md: md.Copy()})
+		}
+		name := RPCName(info.FullMethod)
+		start := time.Now()
+		ctx, span := Tracer("taper/grpc").Start(ctx, name, trace.WithSpanKind(trace.SpanKindServer))
+		m.inFlight.WithLabelValues(name).Inc()
+
+		resp, err := handler(ctx, req)
+
+		m.inFlight.WithLabelValues(name).Dec()
+		setSpanStatus(span, err)
+		m.ObserveRPC(name, time.Since(start), err)
+		span.End()
+		return resp, err
+	}
+}
+
+// UnaryClientInterceptor opens a client span and injects W3C trace context
+// into outgoing gRPC metadata so the downstream server joins this trace,
+// then records RED metrics. Chain it after any span-creating interceptor
+// so injection uses the client span's context.
+func (p *Providers) UnaryClientInterceptor() grpc.UnaryClientInterceptor {
+	m := p.Metrics
+	return func(ctx context.Context, method string, req, reply any,
+		cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		name := RPCName(method)
+		ctx, span := Tracer("taper/grpc").Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient))
+
+		md, ok := metadata.FromOutgoingContext(ctx)
+		if !ok {
+			md = metadata.MD{}
+		} else {
+			md = md.Copy()
+		}
+		Propagator().Inject(ctx, mdCarrier{md: md})
+		ctx = metadata.NewOutgoingContext(ctx, md)
+
+		start := time.Now()
+		m.inFlight.WithLabelValues(name).Inc()
+		err := invoker(ctx, method, req, reply, cc, opts...)
+		m.inFlight.WithLabelValues(name).Dec()
+		setSpanStatus(span, err)
+		m.ObserveRPC(name, time.Since(start), err)
+		span.End()
+		return err
+	}
+}
+
+func setSpanStatus(span trace.Span, err error) {
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return
+	}
+	span.SetStatus(codes.Ok, "")
+}
+
+// mdCarrier adapts gRPC metadata.MD to an OTel TextMapCarrier.
+type mdCarrier struct{ md metadata.MD }
+
+func (c mdCarrier) Get(key string) string {
+	if vs := c.md.Get(key); len(vs) > 0 {
+		return vs[0]
+	}
+	return ""
+}
+
+func (c mdCarrier) Set(key, value string) { c.md.Set(key, value) }
+
+func (c mdCarrier) Keys() []string {
+	keys := make([]string, 0, len(c.md))
+	for k := range c.md {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// Metrics holds the Prometheus RED metrics for a service's gRPC surface.
+type Metrics struct {
+	reg          *prometheus.Registry
+	reqDuration  *prometheus.HistogramVec
+	reqErrors    *prometheus.CounterVec
+	inFlight     *prometheus.GaugeVec
+	breakerState *prometheus.GaugeVec
+}
+
+// NewMetrics builds and registers the RED metric set on a fresh registry
+// (plus the Go and process collectors). One Metrics per service binary.
+func NewMetrics() *Metrics {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	m := &Metrics{
+		reg: reg,
+		reqDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "taper_grpc_request_duration_seconds",
+			Help:    "gRPC request latency by method and status code (RED).",
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 14), // 1ms .. ~8s
+		}, []string{"method", "code"}),
+		reqErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "taper_grpc_request_errors_total",
+			Help: "gRPC request errors by method and status code (RED).",
+		}, []string{"method", "code"}),
+		inFlight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "taper_grpc_requests_in_flight",
+			Help: "Currently executing gRPC requests by method.",
+		}, []string{"method"}),
+		breakerState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "taper_breaker_state",
+			Help: "Circuit breaker state per dependency: 0=closed, 1=half-open, 2=open.",
+		}, []string{"dependency"}),
+	}
+	reg.MustRegister(m.reqDuration, m.reqErrors, m.inFlight, m.breakerState)
+	return m
+}
+
+// ObserveRPC records one completed RPC. Safe on a nil *Metrics (no-op).
+func (m *Metrics) ObserveRPC(method string, elapsed time.Duration, err error) {
+	if m == nil {
+		return
+	}
+	code := status.Code(err)
+	m.reqDuration.WithLabelValues(method, code.String()).Observe(elapsed.Seconds())
+	if err != nil {
+		m.reqErrors.WithLabelValues(method, code.String()).Inc()
+	}
+}
+
+// SetBreakerState publishes a circuit breaker's current state as a gauge
+// (0=closed, 1=half-open, 2=open) so the Fail-Fast Policy is visible.
+func (m *Metrics) SetBreakerState(dependency, state string) {
+	if m == nil {
+		return
+	}
+	var v float64
+	switch state {
+	case "half-open":
+		v = 1
+	case "open":
+		v = 2
+	default:
+		v = 0
+	}
+	m.breakerState.WithLabelValues(dependency).Set(v)
+}
+
+// Handler serves the Prometheus scrape endpoint for this registry.
+func (m *Metrics) Handler() http.Handler {
+	return promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{})
+}
+
+// MetricsServer wraps the metrics handler in an HTTP server for the
+// service's dedicated admin port; the caller runs and shuts it down.
+func MetricsServer(m *Metrics, addr string) *http.Server {
+	return &http.Server{Addr: addr, Handler: m.Handler(), ReadHeaderTimeout: 5 * time.Second}
+}

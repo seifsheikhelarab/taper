@@ -481,6 +481,7 @@ func (s *Saga) FulfillOrder(ctx context.Context, req *orderv1.FulfillOrderReques
 			AggregateID:   tenantUUID.String() + ":" + req.GetOrderId(),
 			EventType:     "order.fulfilled",
 			Payload:       marshalOrderEvent(OrderFulfilled, req.GetOrderId(), o.TotalAmount, evLines),
+			Traceparent:   database.TraceparentText(ctx),
 		}); err != nil {
 			return err
 		}
@@ -546,6 +547,7 @@ func (s *Saga) transition(ctx context.Context, tenantUUID pgtype.UUID, orderID, 
 			AggregateID:   tenantUUID.String() + ":" + orderID,
 			EventType:     "order." + strings.ToLower(state),
 			Payload:       marshalOrderEvent(state, orderID, cur.TotalAmount, nil),
+			Traceparent:   database.TraceparentText(ctx),
 		}); err != nil {
 			return err
 		}

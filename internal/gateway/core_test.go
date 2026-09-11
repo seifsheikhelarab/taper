@@ -167,7 +167,7 @@ func TestInvokeMapsGRPCErrorsAndRecordsBreaker(t *testing.T) {
 	// Unavailable failures feed the breaker; the third opens it.
 	for i := 0; i < 3; i++ {
 		rec := httptest.NewRecorder()
-		c.invoke(rec, httptest.NewRequest("POST", "/x", nil), c.StockBreaker,
+		c.invoke(rec, httptest.NewRequest("POST", "/x", nil), "stock", c.StockBreaker,
 			func(ctx context.Context) (proto.Message, error) {
 				return nil, status.Error(codes.Unavailable, "stock down")
 			})
@@ -182,7 +182,7 @@ func TestInvokeMapsGRPCErrorsAndRecordsBreaker(t *testing.T) {
 	// A domain error must NOT feed the breaker.
 	c2, _ := newTestCore(t)
 	rec := httptest.NewRecorder()
-	c2.invoke(rec, httptest.NewRequest("POST", "/x", nil), c2.StockBreaker,
+	c2.invoke(rec, httptest.NewRequest("POST", "/x", nil), "stock", c2.StockBreaker,
 		func(ctx context.Context) (proto.Message, error) {
 			return nil, status.Error(codes.InvalidArgument, "bad sku")
 		})
@@ -195,7 +195,7 @@ func TestInvokeMapsGRPCErrorsAndRecordsBreaker(t *testing.T) {
 
 	// Success writes protojson.
 	rec = httptest.NewRecorder()
-	c2.invoke(rec, httptest.NewRequest("POST", "/x", nil), c2.StockBreaker,
+	c2.invoke(rec, httptest.NewRequest("POST", "/x", nil), "stock", c2.StockBreaker,
 		func(ctx context.Context) (proto.Message, error) {
 			return &orderv1.GetOrderResponse{OrderId: "o1", Status: "CONFIRMED"}, nil
 		})
@@ -234,7 +234,7 @@ func mustClaims(r *http.Request) auth.Claims {
 func h(c *Core) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/orders", func(w http.ResponseWriter, r *http.Request) {
-		c.invoke(w, r, c.OrderBreaker, func(ctx context.Context) (proto.Message, error) {
+		c.invoke(w, r, "order", c.OrderBreaker, func(ctx context.Context) (proto.Message, error) {
 			return nil, errors.New("unused")
 		})
 	})

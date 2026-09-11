@@ -111,6 +111,7 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 			AggregateID:   tenantUUID.String() + ":" + req.GetSkuId(),
 			EventType:     "stock.adjusted",
 			Payload:       payload,
+			Traceparent:   database.TraceparentText(ctx),
 		})
 		if err != nil {
 			return err
@@ -140,6 +141,7 @@ func (s *Server) AdjustStock(ctx context.Context, req *stockv1.AdjustStockReques
 				AggregateID:   tenantUUID.String() + ":" + req.GetSkuId(),
 				EventType:     "stock.deficit_alert",
 				Payload:       deficitPayload,
+				Traceparent:   database.TraceparentText(ctx),
 			}); err != nil {
 				return err
 			}
@@ -218,6 +220,7 @@ func (s *Server) ReserveStock(ctx context.Context, req *stockv1.ReserveStockRequ
 				AggregateID:   tenantUUID.String() + ":" + l.SkuId,
 				EventType:     "stock.reserved",
 				Payload:       marshalLineEvent("reserve", req.GetOrderId(), l),
+				Traceparent:   database.TraceparentText(ctx),
 			}); err != nil {
 				return err
 			}
@@ -298,6 +301,7 @@ func (s *Server) ReleaseStock(ctx context.Context, req *stockv1.ReleaseStockRequ
 				AggregateID:   tenantUUID.String() + ":" + l.SkuId,
 				EventType:     "stock.released",
 				Payload:       marshalLineEvent("release", req.GetOrderId(), l),
+				Traceparent:   database.TraceparentText(ctx),
 			}); err != nil {
 				return err
 			}
@@ -371,6 +375,7 @@ func (s *Server) ConfirmStockAllocation(ctx context.Context, req *stockv1.Confir
 				AggregateID:   tenantUUID.String() + ":" + l.SkuId,
 				EventType:     "stock.allocated",
 				Payload:       marshalLineEvent("allocate", req.GetOrderId(), l),
+				Traceparent:   database.TraceparentText(ctx),
 			}); err != nil {
 				return err
 			}
@@ -452,6 +457,7 @@ func (s *Server) FulfillStock(ctx context.Context, req *stockv1.FulfillStockRequ
 				AggregateID:   tenantUUID.String() + ":" + l.SkuId,
 				EventType:     "stock.fulfilled",
 				Payload:       marshalLineEvent("fulfill", req.GetOrderId(), l),
+				Traceparent:   database.TraceparentText(ctx),
 			}); err != nil {
 				return err
 			}

@@ -152,6 +152,7 @@ func (s *Server) insertReservations(ctx context.Context, tenantUUID pgtype.UUID,
 				AggregateID:   partitionKey(tenantUUID, req.GetOrderId()),
 				EventType:     "reservation.created",
 				Payload:       []byte(`{"order_id":"` + req.GetOrderId() + `","sku_id":"` + it.GetSkuId() + `"}`),
+				Traceparent:   database.TraceparentText(ctx),
 			}); err != nil {
 				return err
 			}
@@ -229,6 +230,7 @@ func (s *Server) Release(ctx context.Context, req *resv1.ReleaseRequest) (*resv1
 				AggregateID:   partitionKey(tenantUUID, req.GetOrderId()),
 				EventType:     "reservation.released",
 				Payload:       []byte(`{"order_id":"` + req.GetOrderId() + `"}`),
+				Traceparent:   database.TraceparentText(ctx),
 			}); err != nil {
 				return err
 			}
@@ -292,6 +294,7 @@ func (s *Server) AllocateReservation(ctx context.Context, req *resv1.AllocateRes
 				AggregateID:   partitionKey(tenantUUID, req.GetOrderId()),
 				EventType:     "reservation.allocated",
 				Payload:       []byte(`{"order_id":"` + req.GetOrderId() + `"}`),
+				Traceparent:   database.TraceparentText(ctx),
 			}); err != nil {
 				return err
 			}

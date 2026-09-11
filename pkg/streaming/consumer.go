@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // Envelope is the DLQ Envelope from CONTEXT.md: the standardized wrapper
@@ -106,7 +107,9 @@ func NewConsumer(cfg Config, log func(format string, args ...any)) *Consumer {
 
 // Run consumes until ctx is cancelled. Every message is processed with
 // retries; a message that keeps failing is dead-lettered and then committed
-// so the group can make progress.
+// so the group can make progress. Each message runs inside a consumer span
+// joined to the producer's W3C trace (see trace.go), so a distributed trace
+// spans producer -> Kafka -> handler.
 func (c *Consumer) Run(ctx context.Context, h Handler) error {
 	for {
 		msg, err := c.reader.FetchMessage(ctx)
@@ -117,9 +120,13 @@ func (c *Consumer) Run(ctx context.Context, h Handler) error {
 			c.log("streaming: fetch: %v", err)
 			continue
 		}
-		if err := c.process(ctx, msg, h); err != nil {
+		spanCtx, span := MessageSpan(ctx, msg)
+		err = c.process(spanCtx, msg, h)
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
 			c.log("streaming: process key=%s: %v", string(msg.Key), err)
 		}
+		span.End()
 		if err := c.reader.CommitMessages(ctx, msg); err != nil {
 			c.log("streaming: commit: %v", err)
 		}
