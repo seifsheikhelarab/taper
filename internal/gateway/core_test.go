@@ -240,3 +240,24 @@ func h(c *Core) http.Handler {
 	})
 	return c.Middleware(mux)
 }
+
+func TestHealthzExemptFromAuth(t *testing.T) {
+	c, _ := newTestCore(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	rec := httptest.NewRecorder()
+	c.Middleware(mux).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("healthz without token -> %d, want 200 (liveness must not need auth)", rec.Code)
+	}
+
+	rec2 := httptest.NewRecorder()
+	c.Middleware(mux).ServeHTTP(rec2, httptest.NewRequest("GET", "/v1/anything", nil))
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("non-health route without token -> %d, want 401", rec2.Code)
+	}
+}

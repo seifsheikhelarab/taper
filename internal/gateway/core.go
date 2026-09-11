@@ -215,9 +215,15 @@ func (c *Core) publishBreaker(dep string, br *circuitbreaker.Breaker) {
 }
 
 // Middleware chains auth and rate limiting around the route mux. Every
-// route requires a verified token; /healthz is mounted outside.
+// route requires a verified token; /healthz is exempt (liveness probes and
+// the load harness have no token). Rate limiting still applies to all
+// authenticated traffic.
 func (c *Core) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		claims, httpErr := c.authorize(r)
 		if httpErr != nil {
 			httpErr.write(w)

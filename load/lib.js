@@ -16,10 +16,9 @@ export function mintToken(tenantID, secret) {
     exp: Math.floor(Date.now() / 1000) + 3600,
   });
   const body = encoding.b64encode(claims, B64);
-  const sig = encoding.b64encode(
-    crypto.hmac('sha256', secret, body, 'binary'),
-    B64
-  );
+  // Sign the base64 body as text bytes (matching Go's mac.Write([]byte(body)))
+  // and emit base64rawurl directly — no intermediate byte arrays.
+  const sig = crypto.hmac('sha256', secret, body, B64);
   return `${body}.${sig}`;
 }
 
