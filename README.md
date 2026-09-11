@@ -1,248 +1,198 @@
-# Taper — Multi-Tenant Distributed Inventory Management System
+<div align="center">
 
-**Taper** is a high-performance, multi-tenant distributed inventory management system designed for enterprise-grade stock tracking, reservations, order fulfillment, and multi-channel synchronization across multiple warehouses per tenant.
+# Taper
 
-Built in **Go**, Taper balances strong consistency for stock reservation paths (preventing overselling under high concurrency) with eventual consistency for asynchronous downstream workflows using gRPC, PostgreSQL Row-Level Security (RLS), the Transactional Outbox pattern, Debezium CDC, and Kafka.
+**Multi-tenant distributed inventory management system**
 
----
+[![Go](https://img.shields.io/badge/Go-1.26-00add8?style=flat-square&logo=go)](https://go.dev)
+[![CI](https://img.shields.io/github/actions/workflow/status/seifsheikhelarab/taper/ci.yml?style=flat-square&label=CI)](https://github.com/seifsheikhelarab/taper/actions)
 
-## 📋 Table of Contents
+[Overview](#overview) • [Features](#features) • [Architecture](#architecture) • [Getting started](#getting-started) • [Testing](#testing) • [Repository layout](#repository-layout) • [Documentation](#documentation)
 
-- [Overview & Core Architecture](#overview--core-architecture)
-- [Key Features & Design Principles](#key-features--design-principles)
-- [Domain Model & Inventory States](#domain-model--inventory-states)
-- [System Architecture & Services](#system-architecture--services)
-- [Data Consistency & Reliability Patterns](#data-consistency--reliability-patterns)
-- [Tech Stack](#tech-stack)
-- [Repository Structure](#repository-structure)
-- [Getting Started](#getting-started)
-- [Documentation & Architecture Decisions](#documentation--architecture-decisions)
+</div>
 
----
+Taper is a high-performance, multi-tenant inventory system for stock tracking, reservation, order fulfillment, and multi-channel sync across warehouses. It balances **strong consistency** on the stock reservation hot path (no overselling under high concurrency) with **eventual consistency** for downstream workflows — built on gRPC, PostgreSQL Row-Level Security, the transactional outbox pattern, Debezium CDC, and Kafka.
 
-## 💡 Overview & Core Architecture
+> [!NOTE]
+> This is a reference implementation developed in phases: core reservation/order saga (P1–3), REST gateway (P4), and observability, load testing, chaos testing and containerization (P5). It is designed to be read, operated, and stress-tested — not bolted onto a production stack as-is.
 
-In multi-tenant e-commerce and retail ecosystems, stock management faces two primary challenges:
-1. **Preventing Overselling**: High-concurrency events (e.g., flash sales) can cause race conditions if stock deduction is not strongly consistent.
-2. **System Resilience & Scalability**: Synchronous dual-writes to databases and message queues lead to partial failure states. Microservices must communicate cleanly without tight coupling or two-phase commits (2PC).
+## Overview
 
-Taper addresses these challenges through:
-- **Fast-Write Row-Level Locking**: Per-SKU per-warehouse stock updates utilize PostgreSQL `SELECT ... FOR UPDATE` row locks combined with synchronous audit event appending (`stock_events`).
-- **Orchestrated Order Saga**: An explicit Saga manager coordinates `Order Service` $\rightarrow$ `Reservation Service` $\rightarrow$ `Payment Gateway` $\rightarrow$ `Stock Service` with compensating transactions.
-- **Transactional Outbox + Debezium CDC**: State mutations and outbox events are committed atomically within local transactions, avoiding dual-write bugs. Debezium streams events from Postgres WAL directly into Kafka.
-- **Multi-Tenant Isolation**: Tenant data is isolated at the database level using PostgreSQL Row-Level Security (RLS) and multi-tenant connection parameters.
+Stock management in multi-tenant e-commerce faces two hard problems:
 
----
+1. **No overselling under flash-sale concurrency.** Naive `read → check → write` races oversell stock. Taper serializes every stock mutation behind a PostgreSQL `SELECT ... FOR UPDATE` row lock and commits the state change together with an immutable audit event.
+2. **No dual-write inconsistencies.** Writing to both a database and a message queue in application code leaves a partial-failure window. Taper writes domain events to a transactional **outbox** table in the same transaction as the state change; Debezium streams them from the Postgres WAL into Kafka.
 
-## ✨ Key Features & Design Principles
+## Features
 
-- 🔐 **Multi-Tenant Isolation via RLS**: Shared database tables with engine-level row isolation by `tenant_id` ([ADR-0001](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/docs/adr/0001-architecture-foundations.md)).
-- ⚡ **Zero-Oversell Stock Reservation**: Sub-100ms p99 reservation checks with row-level locks on stock rows.
-- 🔄 **Order Saga Orchestration**: Compensation logic for failed payments or stock reservations with explicit state tracking (`PENDING` $\rightarrow$ `RESERVED` $\rightarrow$ `PAID` $\rightarrow$ `CONFIRMED` or `FAILED`).
-- ⏱️ **TTL Reservation Sweeper**: Automatic release of expired stock reservations via a background sweeper goroutine.
-- 📦 **Transactional Outbox & CDC**: Zero dual-write inconsistencies; outbox records are streamed to Kafka via Debezium Connect connectors.
-- 🛡️ **Outbox Retention & Pruning**: Safe background worker ([`pkg/outboxprune`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/pkg/outboxprune)) with Postgres advisory locks and batched deletions ([ADR-0002](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/docs/adr/0002-outbox-pruning.md)).
-- 🚨 **Audit Locking & Reconciliation**: Detection of stock count discrepancies automatically locks SKU rows (`is_locked_for_audit = true`) until manual audit clearance via gRPC endpoints.
-- 🔁 **Dead-Letter Queue (DLQ) & Replay**: Standardized DLQ message encapsulation ([`pkg/streaming`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/pkg/streaming)) and CLI tool ([`cmd/dlqreplay`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/cmd/dlqreplay/main.go)) for message recovery.
-- 🔌 **External Channel Sync**: Clamped stock sync from third-party channels (Shopify, WooCommerce) with deficit reporting.
+- **Zero-oversell reservations** — per-SKU, per-warehouse row-locked writes (`stock_levels`) with a synchronous audit event log (`stock_events`) in the same transaction. Sub-100ms p99 reservation checks via the REST gateway.
+- **Multi-tenant isolation at the engine level** — shared tables guarded by PostgreSQL Row-Level Security; the gateway injects the `tenant_id` from a verified JWT and rejects bodies naming a different tenant.
+- **Orchestrated order saga** — the order service coordinates Reservation → Payment → Stock with explicit compensation (`PENDING_PAYMENT → RESERVED → ALLOCATED → CONFIRMED`, or `COMPENSATED` / `FAILED`).
+- **Transactional outbox + Debezium CDC** — one Kafka topic per service (`*.events`), with per-SKU/per-order ordering via composite partition keys.
+- **Fail-fast circuit breakers** — per-dependency breakers at the gateway return `503` immediately instead of queuing against a degraded downstream.
+- **Idempotency** — `processed_idempotency_keys` records make saga steps and reservations exactly-once, including crash recovery (`SAGA_RESUME_ENABLED`) and an independent reservation-TTL sweeper.
+- **Audit locks & reconciliation** — RLS-scoped stock drift is detected by a reconciliation scan; suspect SKUs are locked (`is_locked_for_audit`) until cleared via the `UnlockStockForAudit` admin endpoint.
+- **Dead-letter queue + replay** — a standardized `pkg/streaming` DLQ envelope plus a `cmd/dlqreplay` CLI to recover failed Kafka messages.
+- **External channel sync** — stock adjustments from Shopify/WooCommerce, clamped at zero with an urgent deficit alert.
+- **End-to-end observability** — W3C `traceparent` propagated across gRPC, Kafka (via the outbox column → Debezium header), and DLQ replay; Prometheus RED metrics + breaker state on admin ports; Jaeger UI.
+- **Outbox pruning** — advisory-locked background worker (`pkg/outboxprune`) so retention never interferes with CDC streaming.
 
----
+## Architecture
 
-## 🏷️ Domain Model & Inventory States
+Five gRPC services, a REST gateway, and a Kafka consumer — each service owns its database and its outbox, all wired to a single Postgres instance via Debezium:
 
-Taper defines explicit inventory state transitions to enforce strict domain boundaries:
+```mermaid
+flowchart LR
+    subgraph surface
+        gw[Gateway :8080]
+    end
+    subgraph grpc["gRPC services"]
+        order[Order :50053]
+        resv[Reservation :50052]
+        stock[Stock :50051]
+    end
+    subgraph dbp["PostgreSQL (RLS)"]
+        order_db[(order_db)]
+        resv_db[(reservation_db)]
+        stock_db[(taper_db)]
+    end
+    subgraph pipes["Kafka (KRaft)"]
+        stock_ev[stock.events]
+        resv_ev[reservation.events]
+        order_ev[order.events]
+    end
 
-```
-[ Available Stock ] --(Reserve)--> [ Reserved Stock ] --(Pay & Allocate)--> [ Allocated Stock ] --(Dispatch)--> [ Fulfilled Stock ]
-         ^                                |
-         |-------(TTL Expire/Release)-----|
-```
+    gw --> order
+    gw --> resv
+    gw --> stock
+    order --> resv
+    order --> stock
+    resv --> stock
 
-| Term | Definition |
-|---|---|
-| **Available Stock** | Inventory ready for new reservations per SKU and warehouse. |
-| **Reserved Stock** | Stock held temporarily for an active order during payment processing (subject to TTL expiry). |
-| **Allocated Stock** | Stock committed to confirmed, paid orders; TTL expiry can no longer release it. |
-| **Fulfilled Stock** | Stock physically shipped, reducing allocated count and physical balance. |
-| **Audit Lock** | An explicit flag (`is_locked_for_audit`) blocking reservation attempts on SKUs with reconciliation drift. |
+    order_db -. outbox .-> debezium[Debezium Connect]
+    resv_db -. outbox .-> debezium
+    stock_db -. outbox .-> debezium
+    debezium --> stock_ev & resv_ev & order_ev
 
-*For complete domain terminology, see [`CONTEXT.md`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/CONTEXT.md).*
-
----
-
-## 🏗️ System Architecture & Services
-
-Taper follows a microservices architecture where each service owns its database schema:
-
-```
-                      +-------------------+
-                      |   gRPC Clients    |
-                      +---------+---------+
-                                |
-        +-----------------------+-----------------------+
-        |                       |                       |
-        v                       v                       v
-+---------------+       +---------------+       +---------------+
-| Order Service |       |  Reservation  |       | Stock Service |
-|  (cmd/order)  |       | (cmd/reserv.) |       |  (cmd/stock)  |
-+-------+-------+       +-------+-------+       +-------+-------+
-        |                       |                       |
-   [order_db]           [reservation_db]            [taper_db]
-        |                       |                       |
-        | outbox                | outbox                | outbox
-        v                       v                       v
-+---------------------------------------------------------------+
-|                      Debezium CDC Connect                     |
-+-------------------------------+-------------------------------+
-                                |
-                                v
-+---------------------------------------------------------------+
-|                       Apache Kafka Bus                        |
-+--------+----------------------+-----------------------+-------+
-         |                      |                       |
-         v                      v                       v
-+------------------+  +-------------------+   +------------------+
-|   Fulfillment    |  |    Channel Sync   |   |   DLQ Replay     |
-|(cmd/fulfillment) |  |(cmd/channelsync)  |   | (cmd/dlqreplay)  |
-+------------------+  +-------------------+   +------------------+
+    stock_ev --> fulfillment[Fulfillment consumer]
+    stock_ev --> channel[Channel Sync]
+    order_ev --> dlq[DLQ replay : CLI]
 ```
 
-### Services Summary
+Services, from the outside in:
 
-- 🛒 **Order Service** ([`cmd/order`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/cmd/order/main.go), [`internal/orderservice`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/internal/orderservice)): Saga orchestrator managing order state transitions, invoking Reservation and Stock services via gRPC with circuit breaking ([`pkg/circuitbreaker`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/pkg/circuitbreaker)).
-- ⏳ **Reservation Service** ([`cmd/reservation`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/cmd/reservation/main.go), [`internal/reservationservice`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/internal/reservationservice)): Manages order line item reservations, holds, releases, and background TTL expiration ([`sweeper.go`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/internal/reservationservice/sweeper.go)).
-- 📊 **Stock Service** ([`cmd/stock`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/cmd/stock/main.go), [`internal/stockservice`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/internal/stockservice)): Controls warehouse stock counts (`stock_levels`), logs audit entries (`stock_events`), executes allocations, and locks SKUs for audit reconciliation.
-- 📦 **Fulfillment Service** ([`cmd/fulfillment`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/cmd/fulfillment/main.go), [`internal/fulfillment`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/internal/fulfillment)): Consumes `order.confirmed` Kafka events and manages order pick tickets and dispatching.
-- 🔄 **Channel Sync Service** ([`cmd/channelsync`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/cmd/channelsync/main.go), [`internal/channelsync`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/internal/channelsync)): Syncs inventory levels with external channels (e.g. Shopify), clamping negative numbers and emitting deficit alerts.
-- 🛠️ **DLQ Replay Utility** ([`cmd/dlqreplay`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/cmd/dlqreplay/main.go)): CLI utility to read failed payloads from Dead Letter Queue Kafka topics and re-inject them into main event topics.
+| Service | Entry point | Role |
+|---|---|---|
+| **Gateway** | `cmd/gateway` | REST front: JWT auth, per-tenant rate limiting, tenant injection, fail-fast error mapping |
+| **Order** | `cmd/order` | Saga orchestrator (`CreateOrder` / `CancelOrder` / `FulfillOrder`) |
+| **Reservation** | `cmd/reservation` | Reservation lifecycle + background TTL sweeper |
+| **Stock** | `cmd/stock` | `stock_levels` writes, `stock_events` audit log, allocations, audit locking |
+| **Fulfillment** | `cmd/fulfillment` | Kafka consumer driving pick tickets and dispatch on `order.confirmed` |
+| **Channelsync** | `cmd/channelsync` | External channel stock sync, clamped at zero |
+| **DLQ replay** | `cmd/dlqreplay` | CLI to re-inject DLQ messages into main topics |
 
----
+### The no-oversell write path
 
-## 🔒 Data Consistency & Reliability Patterns
+Every stock mutation runs in one transaction:
 
-### 1. No-Oversell Fast Write Model
-Stock updates execute within a single PostgreSQL transaction:
 ```sql
-SELECT available_qty, reserved_qty 
-FROM stock_levels 
-WHERE tenant_id = $1 AND sku_id = $2 AND warehouse_id = $3 
-FOR UPDATE;
-```
-If `available_qty >= requested_qty`, the quantities are adjusted, an immutable event is inserted into `stock_events`, and outbox events are appended—all committed in one transaction.
+SELECT available_qty FROM stock_levels
+WHERE tenant_id = $1 AND sku_id = $2 AND warehouse_id = $3
+FOR UPDATE;              -- serialize concurrent reservations on this row
 
-### 2. Transactional Outbox + Debezium CDC
-Services write domain events to an `outbox` table during business operations. Debezium watches Postgres WAL logs via logical replication and pushes events directly to Kafka:
-- Config files: [`db/connect/stock-outbox.json`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/db/connect/stock-outbox.json), [`db/connect/order-outbox.json`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/db/connect/order-outbox.json), [`db/connect/reservation-outbox.json`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/db/connect/reservation-outbox.json).
-
-### 3. Outbox Retention Worker
-The [`pkg/outboxprune`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/pkg/outboxprune) worker runs as an in-process background goroutine per service. It acquires a PostgreSQL advisory lock (`pg_try_advisory_lock`) to safely execute batched deletions (`DELETE ... LIMIT`) on processed outbox rows older than 3 days without locking Debezium CDC streams.
-
----
-
-## 🛠️ Tech Stack
-
-- **Language**: Go 1.26+
-- **RPC & Serialization**: gRPC, Protocol Buffers (`buf`)
-- **Database**: PostgreSQL 16+ with Row-Level Security (RLS)
-- **Database Drivers & Code Generation**: `pgx/v5`, `sqlc`
-- **Messaging & Event Streaming**: Apache Kafka ([`segmentio/kafka-go`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/go.mod)), Debezium CDC Connect
-- **Containerization**: Docker & Docker Compose
-
----
-
-## 📁 Repository Structure
-
-```
-.
-├── cmd/                        # Application entry points
-│   ├── stock/                  # Stock service daemon
-│   ├── reservation/            # Reservation service daemon
-│   ├── order/                  # Order saga orchestrator daemon
-│   ├── fulfillment/            # Fulfillment consumer daemon
-│   ├── channelsync/            # Channel sync daemon
-│   └── dlqreplay/              # DLQ replay CLI utility
-├── internal/                   # Service-private domain logic & gRPC implementations
-│   ├── stockservice/           # Stock levels, adjustments & audit locking
-│   ├── reservationservice/     # Reservation lifecycle & TTL sweeper
-│   ├── orderservice/           # Order saga state machine & handlers
-│   ├── fulfillment/            # Fulfillment processing
-│   └── channelsync/            # External channel synchronization logic
-├── pkg/                        # Reusable system packages & infrastructure drivers
-│   ├── database/               # PostgreSQL connection & RLS helpers
-│   ├── outboxprune/            # Advisory-locked outbox pruning worker
-│   ├── circuitbreaker/         # gRPC client circuit breaker
-│   ├── payment/                # Payment gateway integration interface
-│   ├── streaming/              # Kafka consumer loops, DLQ wrappers & envelopes
-│   └── channel/                # Sales channel sync abstractions
-├── proto/                      # Protobuf schema definitions
-├── db/                         # Database scripts, migrations, queries, and CDC configs
-│   ├── init/                   # Multi-database init SQL & role creation
-│   ├── migrations/             # sql-migrate / golang-migrate schema files
-│   ├── queries/                # sqlc raw SQL query definitions
-│   └── connect/                # Debezium Kafka Connect JSON definitions
-├── docs/                       # Architecture decisions & domain guidelines
-│   ├── adr/                    # Architecture Decision Records (ADRs)
-│   └── agents/                 # Contributor and agent documentation
-├── docker-compose.yml          # Local environment setup (Postgres, Kafka, Debezium)
-├── CONTEXT.md                  # Complete domain glossary & context specifications
-└── idea.md                     # Initial technical specification draft
+-- available_qty >= qty ? adjust counts, append stock_events row += outbox row
 ```
 
----
+The chargeable movement `available − qty` happens against the locked row, then the audit event and outbox record are inserted in the *same* transaction — so oversell is impossible and no event is ever orphaned.
 
-## 🚀 Getting Started
+## Getting started
 
 ### Prerequisites
 
-- **Go**: 1.26 or higher
-- **Docker & Docker Compose**
-- **Buf CLI** (optional, for regenerating protobuf code)
+- Go 1.26+
+- Docker & Docker Compose
+- (optional) [buf](https://buf.build) for regenerating protobuf code, [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/) for load testing
 
-### 1. Launch Infrastructure Stack
-
-Start PostgreSQL databases, Kafka, Zookeeper, and Debezium Connect:
+### 1. Start the infrastructure
 
 ```bash
-docker-compose up -d
+docker compose up -d --wait postgres kafka connect connect-init jaeger
 ```
 
-This starts:
-- **Postgres** (ports `5432-5436` mapped for `taper_db`, `reservation_db`, `order_db`, `fulfillment_db`, `channelsync_db`)
-- **Kafka** (port `9092`)
-- **Debezium Connect** (port `8383`)
-- **pgAdmin** (port `5050`)
+This brings up Postgres (with Debezium's logical-decoding plugins), Kafka in KRaft mode, Debezium Connect with the outbox connectors registered, and Jaeger for traces (`http://localhost:16686`).
 
-### 2. Run Database Migrations
+> [!IMPORTANT]
+> Migrations must run **before** connector registration — the connectors snapshot `public.outbox` at startup. `connect-init` registers them after Connect is healthy; if you started the stack without it, run `docker compose run --rm connect-init` once migrations are applied.
 
-Apply database schemas per service:
+### 2. Apply migrations
 
 ```bash
-# Example applying migrations using your preferred migration runner (e.g. migrate / goose)
-migrate -path db/migrations/stock -database "postgres://stock_user:stock_pass@localhost:5432/taper_db?sslmode=disable" up
-migrate -path db/migrations/reservation -database "postgres://res_user:res_pass@localhost:5433/reservation_db?sslmode=disable" up
-migrate -path db/migrations/order -database "postgres://order_user:order_pass@localhost:5434/order_db?sslmode=disable" up
+docker compose exec -T postgres pg_isready -U postgres
+# one DB per service: taper_db, reservation_db, order_db, channelsync_db
+for f in db/migrations/stock/*.up.sql; do
+  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d taper_db < "$f"
+done
+# repeat for reservation / order / channelsync against their DBs
 ```
 
-### 3. Run Microservices
-
-Start individual services locally:
+### 3. Run the services
 
 ```bash
-# Start Stock Service
 go run ./cmd/stock
-
-# Start Reservation Service
 go run ./cmd/reservation
-
-# Start Order Service
 go run ./cmd/order
+go run ./cmd/fulfillment   # optional: consumes order.confirmed → CONFIRMED
+go run ./cmd/gateway       # REST surface :8080
 ```
 
----
+Sanity check:
 
-## 📚 Documentation & Architecture Decisions
+```bash
+curl -s http://localhost:8080/healthz
+```
 
-For detailed architectural rationale and design choices, refer to:
-- 📖 [`CONTEXT.md`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/CONTEXT.md): Domain vocabulary, state definitions, and invariant rules.
-- 📐 [`docs/adr/0001-architecture-foundations.md`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/docs/adr/0001-architecture-foundations.md): RLS multi-tenancy, outbox CDC, and row-locking model.
-- 📐 [`docs/adr/0002-outbox-pruning.md`](file:///C:/Users/niteinheaven/Desktop/Data/Code/taper/docs/adr/0002-outbox-pruning.md): Advisory-locked outbox retention worker design.
+Every request path (except `/healthz`) requires a `Bearer` token carrying a `tenant_id` claim — the load harness in `load/lib.js` shows how to mint sandbox tokens (`scripts/run-load.sh` runs the whole stack, seeds SKUs, drives k6, and audits the no-oversell invariant).
+
+### Containerized services (optional)
+
+A `containers` compose profile builds all five binaries as ~2 MiB distroless images:
+
+```bash
+docker compose --profile containers up -d --build
+```
+
+Only the gateway publishes a host port (`8080`); internal gRPC and metrics ports stay network-internal. Scale a service with `--scale` — inbound gRPC dials use client-side `round_robin` (`pkg/grpcx`), so replicas share traffic without a proxy hop.
+
+## Testing
+
+| Layer | Command | Notes |
+|---|---|---|
+| Unit | `go test ./pkg/...` | Also `go vet ./...` + `gofmt -l .` in CI |
+| Integration | `go test ./integration/` | Needs the compose stack up (runs in CI against the exact `docker-compose.yml` stack) |
+| Chaos | `CHAOS=1 go test -run TestChaos ./integration/ -timeout 12m` | Kills real service processes mid-saga; asserts `available + allocated == seeded` |
+| Load | `scripts/run-load.sh [reserve\|saga\|both] [rate] [duration]` | k6 against the gateway; `scripts/audit-oversell.sql` asserts the invariant after the run |
+| Infra restarts | `scripts/chaos/kafka-restart.sh` / `postgres-restart.sh` | Broker/DB bounces under live traffic |
+
+A representative result from the reserve scenario (spread across 50 SKUs, low-hundreds rps, audit passed) is recorded in [`docs/runbooks/load.md`](docs/runbooks/load.md).
+
+## Repository layout
+
+```
+cmd/            Service entry points (stock, reservation, order, fulfillment, channelsync, gateway, dlqreplay)
+internal/       Service-private domain logic and gRPC implementations
+pkg/            Reusable packages: database (RLS), streaming (Kafka+DLQ), circuitbreaker,
+                outboxprune, ratelimit, auth, observability, grpcx, channel, payment
+proto/          Protobuf schemas (order, reservation, stock) — buf-generated code in gen/
+db/             init SQL, per-service migrations, sqlc queries, Debezium connector configs
+integration/    End-to-end Go test suites (saga, RLS, CDC, gateway, tracing, chaos)
+load/           k6 load scenarios and helpers
+scripts/        Load/chaos runners and the oversell audit SQL
+docs/           ADRs, research notes, and operational runbooks
+```
+
+## Documentation
+
+- [`CONTEXT.md`](CONTEXT.md) — domain vocabulary and invariants (stock states, saga, idempotency, trace context)
+- [`docs/adr/`](docs/adr) — Architecture Decision Records (RLS multi-tenancy, outbox+CDC, outbox read contract)
+- [`docs/runbooks/`](docs/runbooks) — observability, load-testing, and chaos runbooks
+- [`docs/research/`](docs/research) — gateway HTTP layer and service-containerization findings
