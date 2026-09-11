@@ -155,9 +155,14 @@ services:
 # Service containers (opt-in, docs/research/0002): the five Go binaries as
 # distroless images. Off by default to keep the infra-only compose workflow;
 # run with:  docker compose --profile containers up -d
-# Host conflicts are avoided by publishing only the gateway (8080); internal
-# gRPC and metrics ports stay network-internal. No healthchecks here:
-# distroless has no shell — probe the gateway's /healthz instead.
+# Scale a service with --scale (e.g. --scale stock=2): the gateway and
+# fulfillment dial via pkg/grpcx, which sets the round_robin LB policy, so
+# DNS-returned replicas share traffic per-call. CAVEAT: scale is not
+# persisted — a later plain `docker compose up` reconciles back to one
+# replica, so pass --scale on every up. Only the gateway publishes a host
+# port (8080); internal gRPC and metrics ports stay network-internal. No
+# healthchecks here: distroless has no shell — probe the gateway's /healthz
+# instead.
 # ---------------------------------------------------------------------------
   stock:
     build:

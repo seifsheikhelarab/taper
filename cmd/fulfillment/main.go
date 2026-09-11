@@ -14,6 +14,7 @@ import (
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 	"github.com/seifsheikhelarab/taper/internal/fulfillment"
 	"github.com/seifsheikhelarab/taper/pkg/config"
+	"github.com/seifsheikhelarab/taper/pkg/grpcx"
 	obs "github.com/seifsheikhelarab/taper/pkg/observability"
 	"github.com/seifsheikhelarab/taper/pkg/streaming"
 )
@@ -47,7 +48,10 @@ func main() {
 	}()
 	defer metricsSrv.Close() //nolint:errcheck // admin endpoint at exit
 
-	conn, err := grpc.NewClient(stockAddr,
+	// grpcx.Dial opts into client-side round_robin (docs/research/0002):
+	// FulfillStock is idempotency-keyed, so per-call spreading across stock
+	// replicas is safe.
+	conn, err := grpcx.Dial(stockAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {

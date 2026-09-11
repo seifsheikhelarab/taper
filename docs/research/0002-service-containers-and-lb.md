@@ -163,10 +163,21 @@ does L7 gRPC proxying with upstream groups and round-robin. It works, but:
 
 1. **Do now (cheap, no risk):** multi-stage distroless Dockerfiles behind
    an opt-in compose profile; pin `DB_POOL_MAX_CONNS` per deployment.
+   **[Implemented 2026-09-11](https://github.com/seifsheikhelarab/taper/commit/4610ccc):**
+   one multi-stage Dockerfile (single cached compile pass) +
+   `profiles: ["containers"]` compose services, saga smoke-tested.
 2. **When scaling matters:** DNS-based replica discovery +
    `round_robin` client-side LB in the gateway's three dials (and
    fulfillment's stock dial), replicas behind a headless-style service
    name, no proxy in the internal path.
+   **[Implemented 2026-09-11](https://github.com/seifsheikhelarab/taper/commit/4610ccc):**
+   `pkg/grpcx.Dial` sets `round_robin` and is used by all four client
+   dials; live-verified with `--scale stock=2` — 20 calls split exactly
+   10/10 across replicas (per-replica RED counters). Two operational
+   caveats: compose `--scale` is not persisted across subsequent `up`s,
+   and scale-*up* discovery waits for the resolver's next periodic
+   re-resolve (~30 min for grpc-go's dns resolver) while scale-*down* is
+   picked up immediately on subchannel failure.
 3. **At the perimeter, when needed:** nginx (or any L7 ingress) in front of
    the gateway for TLS + external routing; keep POST retry semantics off.
 

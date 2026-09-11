@@ -18,6 +18,7 @@ import (
 	"github.com/seifsheikhelarab/taper/pkg/auth"
 	"github.com/seifsheikhelarab/taper/pkg/circuitbreaker"
 	"github.com/seifsheikhelarab/taper/pkg/config"
+	"github.com/seifsheikhelarab/taper/pkg/grpcx"
 	obs "github.com/seifsheikhelarab/taper/pkg/observability"
 	"github.com/seifsheikhelarab/taper/pkg/ratelimit"
 )
@@ -90,7 +91,11 @@ func main() {
 }
 
 func dial(addr string, provs *obs.Providers) *grpc.ClientConn {
-	conn, err := grpc.NewClient(addr,
+	// grpcx.Dial opts into client-side round_robin (docs/research/0002):
+	// DNS replicas are addressed per-call, so `docker compose --profile
+	// containers up --scale stock=2` (or k8s replicas) is load-bearing
+	// without any proxy hop.
+	conn, err := grpcx.Dial(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {
