@@ -9,6 +9,8 @@
 // Run:
 //   k6 run -e GATEWAY=http://localhost:8080 -e SECRET=load-secret \
 //     -e TENANT=<uuid> load/reserve-path.js
+// Seed SPREAD_SKUS distinct SKUs (LOAD-SKU-0 .. LOAD-SKU-<n-1>) or set
+// SPREAD_SKUS=1 for the single-row contention mode.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { mintToken, headers, opt, expectStatus } from './lib.js';
@@ -33,6 +35,11 @@ export const options = {
 const tenant = opt('TENANT', '11111111-1111-4111-8111-111111111111');
 const token = mintToken(tenant, opt('SECRET', 'taper-sandbox-secret'));
 const base = opt('GATEWAY', 'http://localhost:8080');
+// SPREAD_SKUS>1 distributes load across that many seeded SKUs (realistic
+// traffic). SPREAD_SKUS=1 concentrates every request on LOAD-SKU, turning
+// the run into a deliberate single-row contention ceiling measurement.
+const spread = Number(opt('SPREAD_SKUS', '50'));
+const skuFor = () => (spread > 1 ? `LOAD-SKU-${__VU % spread}` : 'LOAD-SKU');
 
 export default function () {
   const orderId = `load-${__VU}-${__ITER}`;
@@ -40,7 +47,7 @@ export default function () {
     `${base}/v1/stock/reserve`,
     JSON.stringify({
       orderId,
-      lines: [{ skuId: 'LOAD-SKU', warehouseId: 'W1', quantity: 1 }],
+      lines: [{ skuId: skuFor(), warehouseId: 'W1', quantity: 1 }],
     }),
     headers(token)
   );

@@ -31,6 +31,10 @@ const tenant = opt('TENANT', '11111111-1111-4111-8111-111111111111');
 const token = mintToken(tenant, opt('SECRET', 'taper-sandbox-secret'));
 const base = opt('GATEWAY', 'http://localhost:8080');
 const H = headers(token);
+// SPREAD_SKUS>1 distributes load across seeded SKUs (realistic traffic);
+// SPREAD_SKUS=1 concentrates on LOAD-SKU for the contention ceiling mode.
+const spread = Number(opt('SPREAD_SKUS', '50'));
+const skuFor = () => (spread > 1 ? `LOAD-SKU-${__VU % spread}` : 'LOAD-SKU');
 
 export default function () {
   const orderId = `saga-load-${__VU}-${__ITER}`;
@@ -38,7 +42,7 @@ export default function () {
     `${base}/v1/orders`,
     JSON.stringify({
       orderId,
-      lines: [{ skuId: 'LOAD-SKU', warehouseId: 'W1', quantity: 1, unitPrice: 100 }],
+      lines: [{ skuId: skuFor(), warehouseId: 'W1', quantity: 1, unitPrice: 100 }],
     }),
     H
   );
