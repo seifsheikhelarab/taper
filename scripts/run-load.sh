@@ -67,15 +67,30 @@ docker compose exec -T postgres psql -U postgres -d taper_db -c \
    VALUES ('${tenant}', 'LOAD-SKU', 'W1', 100000)
    ON CONFLICT (tenant_id, sku_id, warehouse_id)
    DO UPDATE SET available_qty = EXCLUDED.available_qty, reserved_qty = 0, allocated_qty = 0" >/dev/null
+# Spread SKUs (LOAD-SKU-0 .. LOAD-SKU-49): the realistic-traffic hot set used
+# when SPREAD_SKUS>1; seeded regardless so either scenario mode works.
+docker compose exec -T postgres psql -U postgres -d taper_db -c \
+  "INSERT INTO stock_levels (tenant_id, sku_id, warehouse_id, available_qty)
+   SELECT '${tenant}', 'LOAD-SKU-' || g, 'W1', 100000 FROM generate_series(0, 49) g
+   ON CONFLICT (tenant_id, sku_id, warehouse_id)
+   DO UPDATE SET available_qty = EXCLUDED.available_qty, reserved_qty = 0, allocated_qty = 0" >/dev/null
 
 run_k6() {
-  # k6 runs in Docker; host services are reached via host.docker.internal
-  # (Docker Desktop / Linux with --add-host). MSYS_NO_PATHCONV stops Git
-  # Bash from rewriting the container path /scripts/... into a Windows
-  # path; pwd -W gives Docker Desktop a mountable Windows-style path.
+  # Prefer native k6: it hits the gateway directly. The Docker fallback goes
+  # through Docker Desktop's host.docker.internal proxy, which on Windows
+  # adds seconds per request — its numbers measure the proxy, not the stack.
+  local k6args=("run" "-e" "GATEWAY=http://localhost:8080" "-e" "SECRET=$secret" \
+    "-e" "TENANT=$tenant" "-e" "RATE=$rate" "-e" "DURATION=$duration" \
+    "-e" "SPREAD_SKUS=${SPREAD_SKUS:-50}" "load/$1")
+  if command -v k6 >/dev/null 2>&1; then
+    k6 "${k6args[@]}"
+    return
+  fi
+  echo "WARN: native k6 not found; falling back to Docker (numbers include the Docker proxy)" >&2
   MSYS_NO_PATHCONV=1 docker run --rm --add-host=host.docker.internal:host-gateway \
     -e GATEWAY=http://host.docker.internal:8080 -e SECRET="$secret" \
     -e TENANT="$tenant" -e RATE="$rate" -e DURATION="$duration" \
+    -e SPREAD_SKUS="${SPREAD_SKUS:-50}" \
     -v "$(pwd -W)/load:/scripts" "$k6_image" run "/scripts/$1"
 }
 
