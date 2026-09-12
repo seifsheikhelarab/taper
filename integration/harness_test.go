@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -198,16 +199,35 @@ func (e *testEnv) seed(t *testing.T, tenant, sku, warehouse string, qty int32) {
 
 func (e *testEnv) stockLevel(t *testing.T, tenant, sku, warehouse string) (available, reserved, allocated int32) {
 	t.Helper()
+	avail, res, alloc, ok := e.stockLevelOk(t, tenant, sku, warehouse)
+	if !ok {
+		t.Fatalf("read stock level %s/%s: no row", sku, warehouse)
+	}
+	return avail, res, alloc
+}
+
+// stockLevelOk is the non-fatal variant: ok is false when the row does not
+// exist (asserting absence without failing the test).
+func (e *testEnv) stockLevelOk(t *testing.T, tenant, sku, warehouse string) (available, reserved, allocated int32, ok bool) {
+	t.Helper()
 	ctx := database.WithTenantID(context.Background(), tenant)
+	found := false
 	err := database.ExecTxWithTenant(ctx, e.stockPool, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx,
+		err := tx.QueryRow(ctx,
 			"SELECT available_qty, reserved_qty, allocated_qty FROM stock_levels WHERE tenant_id=$1::uuid AND sku_id=$2 AND warehouse_id=$3",
 			tenant, sku, warehouse).Scan(&available, &reserved, &allocated)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // absent: ok stays false, no test failure
+		}
+		if err == nil {
+			found = true
+		}
+		return err
 	})
 	if err != nil {
 		t.Fatalf("read stock level %s/%s: %v", sku, warehouse, err)
 	}
-	return
+	return available, reserved, allocated, found
 }
 
 func (e *testEnv) outboxCount(t *testing.T, pool *pgxpool.Pool, tenant, eventType string) int {

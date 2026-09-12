@@ -51,16 +51,11 @@ jobs:
       - name: Apply migrations
         run: |
           until docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do sleep 2; done
-          # Every numbered migration per service, in filename order — a glob,
-          # not a hardcoded list, so adding a migration cannot be forgotten.
-          set -e
-          for pair in stock:taper_db reservation:reservation_db order:order_db channelsync:channelsync_db; do
-            svc="${pair%%:*}"; db="${pair##*:}"
-            for f in db/migrations/$svc/*.up.sql; do
-              echo "-- $f -> $db"
-              docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d "$db" < "$f"
-            done
-          done
+          # Ledger runner (spec #52, US19): every pending migration per
+          # service, recorded in schema_migrations so a partial apply cannot
+          # silently replay.
+          chmod +x scripts/migrate.sh
+          scripts/migrate.sh "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres"
 
       - name: Start Debezium Connect
         run: docker compose up -d --wait connect
@@ -91,7 +86,14 @@ jobs:
       - name: Integration tests
         env:
           KAFKA_BROKERS: localhost:29092
-        run: go test -v ./integration/
+          # Phase 6 (spec #52): DRAIN=1 runs the graceful-drain and
+          # readiness-flip tests (Testing Decisions a+b) — real subprocesses,
+          # SIGTERM delivery, compose Postgres pause/unpause. Ports 50051-
+          # 50053/9151-9153 are free on hosted runners.
+          DRAIN: "1"
+        # Explicit timeout: the drain tests add subprocess build/boot/restart
+        # time on top of an already long suite; the 10m default is too tight.
+        run: go test -v -timeout 20m ./integration/
 
       - name: Diagnostics on failure
         if: failure()

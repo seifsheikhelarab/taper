@@ -1,0 +1,45 @@
+# Shared non-secret configuration (spec #52, US23). Secrets hold only
+# credential material; values mirror .env.example and docker-compose.yml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: taper-config
+  namespace: taper
+data:
+  STOCK_ADDR: "stock:50051"
+  RESERVATION_ADDR: "reservation:50052"
+  ORDER_ADDR: "order:50053"
+  KAFKA_BROKERS: "kafka:9092"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
+  TAPER_DRAIN: "15s"
+  METRICS_ADDR: ":9100"
+  SAGA_RESUME_ENABLED: "1"
+  RECONCILE_ENABLED: "1"
+  RECONCILE_INTERVAL: "24h"
+  OUTBOX_PRUNE_ENABLED: "1"
+  OUTBOX_PRUNE_INTERVAL: "1h"
+  OUTBOX_PRUNE_RETENTION: "72h"
+  IDEMPOTENCY_PRUNE_ENABLED: "1"
+  IDEMPOTENCY_PRUNE_INTERVAL: "1h"
+  IDEMPOTENCY_PRUNE_RETENTION: "168h"
+  GATEWAY_RATE_PER_TENANT: "10"
+  GATEWAY_BURST_PER_TENANT: "20"
+  GATEWAY_RATE_BUCKET_FLOOR: "1000"
+---
+# Secret material only (spec #52, US29: no usable dev default ships).
+# Create with real values before deploying:
+#   kubectl -n taper create secret generic taper-secrets \
+#     --from-literal=GATEWAY_JWT_SECRET='<random 32+ bytes>' \
+#     --from-literal=POSTGRES_SUPERUSER_PASSWORD='<random>'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: taper-secrets
+  namespace: taper
+type: Opaque
+stringData:
+  # Placeholders fail the gateway at boot when used verbatim is impossible:
+  # empty string would, so real values MUST be set before apply. The
+  # gateway exits non-zero on a blank secret (fail-fast config).
+  GATEWAY_JWT_SECRET: ""
+  POSTGRES_SUPERUSER_PASSWORD: ""

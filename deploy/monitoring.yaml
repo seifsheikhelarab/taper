@@ -1,0 +1,77 @@
+# Prometheus Operator wiring (spec #52, US25): scrape every service's admin
+# listener (RED metrics from pkg/observability) and evaluate the SLO burn
+# + drain alert rules. Requires prometheus-operator CRDs; without them,
+# load the rules file into your Prometheus instance directly.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: taper-services
+  namespace: taper
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [stock, reservation, order, fulfillment, channelsync, gateway]
+  endpoints:
+    - port: admin
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: taper-alerts
+  namespace: taper
+spec:
+  groups:
+    - name: taper-slo
+      rules:
+        # Select by the operator's target labels (service/namespace), NOT
+        # job: ServiceMonitor-generated job labels look like
+        # "taper/taper-services/admin" and never equal a bare service name.
+        # Gateway availability SLO (99.5%): page on fast burn.
+        - alert: TaperGatewayHighErrorRate
+          expr: |
+            sum(rate(taper_grpc_request_errors_total{service="gateway"}[5m]))
+              / sum(rate(taper_grpc_request_duration_seconds_count{service="gateway"}[5m])) > 0.05
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "Gateway 5xx error budget burning fast (>5% for 5m)"
+        # Latency SLO (p99 < 1s): page on sustained breach.
+        - alert: TaperGatewayHighLatency
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(taper_grpc_request_duration_seconds_bucket{service="gateway"}[5m])) by (le)) > 1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Gateway p99 latency above 1s for 10m"
+        # Fail-Fast Policy visible: any open breaker means a dependency is
+        # down and requests are failing fast (503) instead of queueing.
+        - alert: TaperBreakerOpen
+          expr: max_over_time(taper_breaker_state[2m]) >= 2
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "Circuit breaker open for {{ $labels.dependency }}"
+        # Saga success SLO: confirmed/total sagas over 10m below 95%.
+        - alert: TaperSagaSuccessLow
+          expr: |
+            sum(rate(taper_grpc_request_duration_seconds_count{service="gateway",method=~".*CreateOrder.*",code="OK"}[10m]))
+              / sum(rate(taper_grpc_request_duration_seconds_count{service="gateway",method=~".*CreateOrder.*"}[10m])) < 0.95
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Saga success rate below 95% over 10m"
+        # Drain signal: a replica reporting not-ready while its liveness is
+        # fine is the planned-maintenance/dependency-loss signature.
+        - alert: TaperServiceNotReady
+          expr: up{namespace="taper"} == 0
+          for: 1m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} readiness failing (draining or dependency down)"

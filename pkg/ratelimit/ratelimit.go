@@ -2,7 +2,9 @@
 // gateway. One bucket per tenant: bursts are absorbed up to the bucket
 // capacity, sustained traffic is capped at the refill rate, and tenants are
 // isolated from each other. Deliberately not distributed — Redis stays out
-// until a multi-gateway deployment earns it.
+// until a multi-gateway deployment earns it. Buckets are evicted least
+// recently used beyond a configurable floor so tenant churn cannot grow the
+// map without bound (spec #52, B2); the limit is per-process, not global.
 package ratelimit
 
 import (
@@ -19,7 +21,8 @@ type Decision struct {
 	RetryAfter time.Duration
 }
 
-// Bucket is one tenant's token bucket.
+// bucket is one tenant's token bucket. last doubles as the LRU stamp for
+// eviction (updated on every Take).
 type bucket struct {
 	tokens float64
 	last   time.Time
@@ -30,16 +33,26 @@ type Limiter struct {
 	mu      sync.Mutex
 	rate    float64 // tokens per second
 	burst   float64 // bucket capacity
+	max     int     // bucket floor; 0 = unbounded
 	buckets map[string]*bucket
 	now     func() time.Time
 }
 
 // New creates a limiter refilling at rate tokens per second with burst
-// capacity. rate or burst <= 0 disables limiting (every Take succeeds).
+// capacity and unbounded buckets. rate or burst <= 0 disables limiting
+// (every Take succeeds).
 func New(rate float64, burst float64) *Limiter {
+	return NewLimited(rate, burst, 0)
+}
+
+// NewLimited is New with a bucket floor: when a new tenant arrives while
+// the map holds max buckets, the least recently used tenant's bucket is
+// evicted. Active tenants are unaffected (their buckets are fresh).
+func NewLimited(rate float64, burst float64, maxBuckets int) *Limiter {
 	return &Limiter{
 		rate:    rate,
 		burst:   burst,
+		max:     maxBuckets,
 		buckets: make(map[string]*bucket),
 		now:     time.Now,
 	}
@@ -56,6 +69,7 @@ func (l *Limiter) Take(tenant string) Decision {
 	now := l.now()
 	b, ok := l.buckets[tenant]
 	if !ok {
+		l.evictLocked(now)
 		b = &bucket{tokens: l.burst, last: now}
 		l.buckets[tenant] = b
 	}
@@ -69,4 +83,30 @@ func (l *Limiter) Take(tenant string) Decision {
 	}
 	b.tokens--
 	return Decision{Allowed: true}
+}
+
+// Len reports the number of live buckets.
+func (l *Limiter) Len() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.buckets)
+}
+
+// evictLocked makes room for one new bucket when the floor is set by
+// dropping the least recently used bucket. O(n) only on new-tenant arrival
+// while full; n is bounded by the floor.
+func (l *Limiter) evictLocked(now time.Time) {
+	if l.max <= 0 || len(l.buckets) < l.max {
+		return
+	}
+	oldestKey := ""
+	var oldest time.Time
+	for k, b := range l.buckets {
+		if oldestKey == "" || b.last.Before(oldest) {
+			oldestKey, oldest = k, b.last
+		}
+	}
+	if oldestKey != "" {
+		delete(l.buckets, oldestKey)
+	}
 }

@@ -50,40 +50,56 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 		return
 	}
 
-	// Group by (tenant_id, order_id).
-	type groupKey struct {
-		tenant  string
-		orderID string
-	}
-	groups := map[groupKey][]resdb.Reservation{}
-	for _, r := range expired {
-		k := groupKey{tenant: r.TenantID.String(), orderID: r.OrderID}
-		groups[k] = append(groups[k], r)
-	}
-
-	for k, rows := range groups {
-		var stockLines []*stockv1.StockLine
-		for _, r := range rows {
-			stockLines = append(stockLines, &stockv1.StockLine{
-				SkuId:       r.SkuID,
-				WarehouseId: r.WarehouseID,
-				Quantity:    r.Quantity,
-			})
-		}
+	for k, rows := range groupByOrder(expired) {
+		release := releaseRequest(k.tenant, k.orderID, rows)
 		// Use compensation key to avoid idempotency suppression by stock service.
-		if _, err := s.stock.ReleaseStock(ctx, &stockv1.ReleaseStockRequest{
-			TenantId:       k.tenant,
-			OrderId:        k.orderID,
-			Reason:         "ttl_expiry",
-			IdempotencyKey: database.CompensationKey(k.tenant, k.orderID),
-			Lines:          stockLines,
-		}); err != nil {
+		if _, err := s.stock.ReleaseStock(ctx, release); err != nil {
 			log.Printf("sweeper: release stock order %s: %v", k.orderID, err)
 			continue
 		}
 		for _, r := range rows {
 			s.markExpired(ctx, r)
 		}
+	}
+}
+
+// groupKey identifies one release unit: a reservation batch is released
+// per (tenant, order) in a single idempotently-keyed stock call.
+type groupKey struct {
+	tenant  string
+	orderID string
+}
+
+// groupByOrder groups expired reservations by (tenant_id, order_id).
+// Extracted for unit testing (spec #52, T7): the grouping drives which
+// stock lines ride one release and which compensation key covers them.
+func groupByOrder(rows []resdb.Reservation) map[groupKey][]resdb.Reservation {
+	groups := map[groupKey][]resdb.Reservation{}
+	for _, r := range rows {
+		k := groupKey{tenant: r.TenantID.String(), orderID: r.OrderID}
+		groups[k] = append(groups[k], r)
+	}
+	return groups
+}
+
+// releaseRequest builds the stock release for one (tenant, order) group:
+// every line of the batch, with the compensation key so a sweeper replay
+// is exactly-once at the stock service.
+func releaseRequest(tenant, orderID string, rows []resdb.Reservation) *stockv1.ReleaseStockRequest {
+	var stockLines []*stockv1.StockLine
+	for _, r := range rows {
+		stockLines = append(stockLines, &stockv1.StockLine{
+			SkuId:       r.SkuID,
+			WarehouseId: r.WarehouseID,
+			Quantity:    r.Quantity,
+		})
+	}
+	return &stockv1.ReleaseStockRequest{
+		TenantId:       tenant,
+		OrderId:        orderID,
+		Reason:         "ttl_expiry",
+		IdempotencyKey: database.CompensationKey(tenant, orderID),
+		Lines:          stockLines,
 	}
 }
 

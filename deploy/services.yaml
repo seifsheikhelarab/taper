@@ -1,0 +1,376 @@
+# The five Go binaries mirroring the compose containers profile. Common
+# traits: probes on the admin listener (/healthz liveness, /readyz
+# readiness), env from taper-config + taper-secrets, TAPER_DRAIN drain
+# window, distroless images built from the repo Dockerfile (BIN build-arg).
+# NOTE on GATEWAY_JWT_SECRET: the gateway exits at boot when it is blank
+# (spec #52 fail-fast); set a real value in taper-secrets before deploy.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stock
+  namespace: taper
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: stock }
+  template:
+    metadata:
+      labels: { app: stock }
+    spec:
+      containers:
+        - name: stock
+          image: ghcr.io/seifsheikhelarab/taper-stock:latest
+          ports:
+            - containerPort: 50051
+              name: grpc
+            - containerPort: 9100
+              name: admin
+          envFrom:
+            - configMapRef: { name: taper-config }
+            - secretRef: { name: taper-secrets }
+          env:
+            - name: STOCK_ADDR
+              value: ":50051"
+            - name: STOCK_DATABASE_URL
+              value: "postgres://taper_app:taperapp@postgres:5432/taper_db"
+            - name: STOCK_SWEEPER_DATABASE_URL
+              value: "postgres://taper_sweeper:tapersweeper@postgres:5432/taper_db"
+            - name: METRICS_ADDR
+              value: ":9100"
+          readinessProbe:
+            httpGet: { path: /readyz, port: admin }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stock
+  namespace: taper
+  # Metadata labels drive the ServiceMonitor selector (spec.selector below
+  # only routes traffic) — without them nothing is scraped.
+  labels: { app: stock }
+spec:
+  selector: { app: stock }
+  ports:
+    - port: 50051
+      targetPort: grpc
+    - name: admin
+      port: 9100
+      targetPort: admin
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: stock
+  namespace: taper
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: stock }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reservation
+  namespace: taper
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: reservation }
+  template:
+    metadata:
+      labels: { app: reservation }
+    spec:
+      containers:
+        - name: reservation
+          image: ghcr.io/seifsheikhelarab/taper-reservation:latest
+          ports:
+            - containerPort: 50052
+              name: grpc
+            - containerPort: 9100
+              name: admin
+          envFrom:
+            - configMapRef: { name: taper-config }
+            - secretRef: { name: taper-secrets }
+          env:
+            - name: RESERVATION_ADDR
+              value: ":50052"
+            - name: RESERVATION_DATABASE_URL
+              value: "postgres://taper_app:taperapp@postgres:5432/reservation_db"
+            - name: SWEEPER_DATABASE_URL
+              value: "postgres://taper_sweeper:tapersweeper@postgres:5432/reservation_db"
+            - name: METRICS_ADDR
+              value: ":9100"
+          readinessProbe:
+            httpGet: { path: /readyz, port: admin }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reservation
+  namespace: taper
+  labels: { app: reservation }
+spec:
+  selector: { app: reservation }
+  ports:
+    - port: 50052
+      targetPort: grpc
+    - name: admin
+      port: 9100
+      targetPort: admin
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: reservation
+  namespace: taper
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: reservation }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order
+  namespace: taper
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: order }
+  template:
+    metadata:
+      labels: { app: order }
+    spec:
+      containers:
+        - name: order
+          image: ghcr.io/seifsheikhelarab/taper-order:latest
+          ports:
+            - containerPort: 50053
+              name: grpc
+            - containerPort: 9100
+              name: admin
+          envFrom:
+            - configMapRef: { name: taper-config }
+            - secretRef: { name: taper-secrets }
+          env:
+            - name: ORDER_ADDR
+              value: ":50053"
+            - name: ORDER_DATABASE_URL
+              value: "postgres://taper_app:taperapp@postgres:5432/order_db"
+            - name: ORDER_SWEEPER_DATABASE_URL
+              value: "postgres://taper_sweeper:tapersweeper@postgres:5432/order_db"
+            - name: METRICS_ADDR
+              value: ":9100"
+          readinessProbe:
+            httpGet: { path: /readyz, port: admin }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order
+  namespace: taper
+  labels: { app: order }
+spec:
+  selector: { app: order }
+  ports:
+    - port: 50053
+      targetPort: grpc
+    - name: admin
+      port: 9100
+      targetPort: admin
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: order
+  namespace: taper
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: order }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fulfillment
+  namespace: taper
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: fulfillment }
+  template:
+    metadata:
+      labels: { app: fulfillment }
+    spec:
+      containers:
+        - name: fulfillment
+          image: ghcr.io/seifsheikhelarab/taper-fulfillment:latest
+          ports:
+            - containerPort: 9100
+              name: admin
+          envFrom:
+            - configMapRef: { name: taper-config }
+            - secretRef: { name: taper-secrets }
+          env:
+            - name: METRICS_ADDR
+              value: ":9100"
+          readinessProbe:
+            httpGet: { path: /readyz, port: admin }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+# Admin-only Service: the ServiceMonitor scrapes Services, and fulfillment
+# publishes no gRPC port — without this its RED metrics are never collected.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fulfillment
+  namespace: taper
+  labels: { app: fulfillment }
+spec:
+  selector: { app: fulfillment }
+  ports:
+    - name: admin
+      port: 9100
+      targetPort: admin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: channelsync
+  namespace: taper
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: channelsync }
+  template:
+    metadata:
+      labels: { app: channelsync }
+    spec:
+      containers:
+        - name: channelsync
+          image: ghcr.io/seifsheikhelarab/taper-channelsync:latest
+          ports:
+            - containerPort: 9100
+              name: admin
+          envFrom:
+            - configMapRef: { name: taper-config }
+            - secretRef: { name: taper-secrets }
+          env:
+            - name: METRICS_ADDR
+              value: ":9100"
+            - name: CHANNELSYNC_DATABASE_URL
+              value: "postgres://taper_app:taperapp@postgres:5432/channelsync_db"
+          readinessProbe:
+            httpGet: { path: /readyz, port: admin }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+# Admin-only Service: same ServiceMonitor reason as fulfillment.
+apiVersion: v1
+kind: Service
+metadata:
+  name: channelsync
+  namespace: taper
+  labels: { app: channelsync }
+spec:
+  selector: { app: channelsync }
+  ports:
+    - name: admin
+      port: 9100
+      targetPort: admin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: taper
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: gateway }
+  template:
+    metadata:
+      labels: { app: gateway }
+    spec:
+      containers:
+        - name: gateway
+          image: ghcr.io/seifsheikhelarab/taper-gateway:latest
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 9100
+              name: admin
+          envFrom:
+            - configMapRef: { name: taper-config }
+            - secretRef: { name: taper-secrets }
+          env:
+            - name: GATEWAY_ADDR
+              value: ":8080"
+            - name: METRICS_ADDR
+              value: ":9100"
+          readinessProbe:
+            httpGet: { path: /readyz, port: admin }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: taper
+  labels: { app: gateway }
+spec:
+  selector: { app: gateway }
+  ports:
+    - port: 8080
+      targetPort: http
+    - name: admin
+      port: 9100
+      targetPort: admin
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway
+  namespace: taper
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: gateway }

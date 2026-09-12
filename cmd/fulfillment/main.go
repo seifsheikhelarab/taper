@@ -4,13 +4,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 	"github.com/seifsheikhelarab/taper/internal/fulfillment"
+	"github.com/seifsheikhelarab/taper/pkg/closer"
 	"github.com/seifsheikhelarab/taper/pkg/config"
 	"github.com/seifsheikhelarab/taper/pkg/grpcx"
 	obs "github.com/seifsheikhelarab/taper/pkg/observability"
@@ -22,29 +23,56 @@ func main() {
 	brokers := config.EnvOr("KAFKA_BROKERS", "localhost:29092")
 	metricsAddr := config.EnvOr("METRICS_ADDR", ":9104")
 
-	provs, stopObs := obs.MustRun("fulfillment", metricsAddr)
-	defer stopObs()
+	c := closer.New(closer.DrainWindow())
 
-	// grpcx.Dial opts into client-side round_robin (docs/research/0002):
+	// Structured JSON logs with trace correlation (spec #52, US22): the
+	// stdlib logger routes through slog, so existing log.Printf call sites
+	// render as correlated JSON.
+	obs.SetDefaultLogger("fulfillment")
+
+	provs, stopObs := obs.MustRun("fulfillment", metricsAddr)
+	c.Defer(func(context.Context) error { stopObs(); return nil })
+
+	// grpcx dials opt into client-side round_robin (docs/research/0002):
 	// FulfillStock is idempotency-keyed, so per-call spreading across stock
-	// replicas is safe.
-	conn, err := grpcx.Dial(stockAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	// replicas is safe. Transport posture comes from the GRPC_TLS_* /
+	// GRPC_INSECURE env surface (spec #52, B2).
+	conn, err := grpcx.DialFromEnv(stockAddr,
 		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {
 		log.Fatalf("dial stock: %v", err)
 	}
-	defer conn.Close()
+	c.Defer(func(context.Context) error { _ = conn.Close(); return nil })
 
 	svc := fulfillment.New(stockv1.NewStockServiceClient(conn), log.Printf)
 
-	c := streaming.NewConsumer(streaming.Config{
+	cons := streaming.NewConsumer(streaming.Config{
 		Brokers: []string{brokers},
 		Topic:   "order.events",
 		GroupID: config.EnvOr("FULFILLMENT_GROUP_ID", "fulfillment"),
 	}, log.Printf)
+
+	// Readiness (spec #52, B1): Kafka reachable, stock downstream reachable.
+	for i, b := range closer.KafkaBrokers(brokers) {
+		provs.RegisterReadiness(fmt.Sprintf("kafka-%d", i), closer.TCPDial(b))
+	}
+	provs.RegisterReadiness("stock", closer.GRPCReach(conn))
+
 	log.Printf("fulfillment consuming order.events from %s", brokers)
-	if err := c.Run(context.Background(), svc.HandleOrderEvent); err != nil {
-		log.Fatalf("consumer: %v", err)
+	consumeErr := make(chan error, 1)
+	go func() { consumeErr <- cons.Run(c.Context(), svc.HandleOrderEvent) }()
+
+	// The consumer returns promptly on ctx cancel (FetchMessage honors it)
+	// and closes its own reader; nothing further to drain.
+	c.DeferFirst(func(context.Context) error { return <-consumeErr })
+
+	osExit(c.Wait())
+}
+
+// osExit is a test seam over os.Exit: 0 returns normally (process exit 0),
+// anything else is fatal.
+var osExit = func(code int) {
+	if code != 0 {
+		log.Fatalf("fulfillment: unclean exit %d", code)
 	}
 }

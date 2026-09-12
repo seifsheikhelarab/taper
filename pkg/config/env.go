@@ -46,9 +46,9 @@ func EnvDuration(key string, def time.Duration) time.Duration {
 	return d
 }
 
-// EnvInt returns key parsed as an int, or def when unset, invalid, or
-// non-positive.
-func EnvInt(key string, def int) int {
+// EnvOrInt returns key parsed as an int, or def when unset, invalid, or
+// non-positive. EnvPositiveInt is the fail-fast variant.
+func EnvOrInt(key string, def int) int {
 	n, err := strconv.Atoi(os.Getenv(key))
 	if err != nil || n <= 0 {
 		return def
