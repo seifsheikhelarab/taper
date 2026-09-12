@@ -81,9 +81,9 @@ func NewJWT(secret []byte) *JWT {
 // call sites and tests read naturally while the format migrates.
 func NewSandbox(secret []byte) *JWT { return NewJWT(secret) }
 
-// IssueOptions tunes Issue beyond the required tenant.
+// IssueOptions tunes Issue beyond the required tenant. TTL stays positional
+// on Issue (the preserved surface shape); only identity claims ride here.
 type IssueOptions struct {
-	TTL     time.Duration
 	Subject string
 	Role    string
 	Scopes  []string
@@ -94,17 +94,17 @@ func (j *JWT) Issue(_ context.Context, tenantID string, ttl time.Duration, opts 
 	if tenantID == "" {
 		return "", fmt.Errorf("%w: empty tenant", ErrUnauthenticated)
 	}
-	o := IssueOptions{TTL: ttl}
+	var o IssueOptions
 	if len(opts) > 0 {
 		o = opts[0]
 	}
-	if o.TTL <= 0 {
-		o.TTL = 15 * time.Minute
+	if ttl <= 0 {
+		ttl = 15 * time.Minute
 	}
 	now := j.now()
 	claims := Claims{
 		TenantID: tenantID,
-		Expiry:   now.Add(o.TTL).Unix(),
+		Expiry:   now.Add(ttl).Unix(),
 		Subject:  o.Subject,
 		Role:     o.Role,
 		Scopes:   o.Scopes,

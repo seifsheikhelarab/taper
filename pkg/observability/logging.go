@@ -7,8 +7,10 @@ package observability
 
 import (
 	"context"
+	"log"
 	"log/slog"
 	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel/trace"
 )
@@ -58,4 +60,29 @@ func LoggerFrom(logger *slog.Logger) *slog.Logger {
 		return slog.Default()
 	}
 	return logger
+}
+
+// SetDefaultLogger makes a NewLogger(service) the package-default slog
+// logger AND redirects the standard library logger to it, so every
+// existing log.Printf call site (binaries, worker loops, deps like
+// outboxprune) renders as correlated JSON without a mechanical sweep:
+// log output goes through the slog handler and gains service + trace_id.
+func SetDefaultLogger(service string) {
+	logger := NewLogger(service)
+	slog.SetDefault(logger)
+	log.SetOutput(&slogWriter{logger: logger})
+	log.SetFlags(0) // the JSON handler owns formatting
+}
+
+// slogWriter adapts a slog.Logger to io.Writer for log.SetOutput:
+// each Write is one formatted line (log.Printf guarantees newline
+// termination) emitted at Info with the message as-is.
+type slogWriter struct {
+	logger *slog.Logger
+}
+
+func (w *slogWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimSuffix(string(p), "\n")
+	w.logger.Info(msg)
+	return len(p), nil
 }

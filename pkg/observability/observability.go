@@ -12,7 +12,6 @@ package observability
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -21,6 +20,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/seifsheikhelarab/taper/pkg/closer"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
@@ -142,7 +142,9 @@ func (p *Providers) SetDegraded(degraded bool) {
 	p.degraded = degraded
 }
 
-// readyError describes why the process is not ready.
+// readyError describes why the process is not ready: degraded is checked
+// first, then every registered check via closer.Readiness (the shared
+// concurrent aggregation).
 func (p *Providers) readyError(ctx context.Context) error {
 	p.mu.Lock()
 	degraded := p.degraded
@@ -155,29 +157,7 @@ func (p *Providers) readyError(ctx context.Context) error {
 	if degraded {
 		return errors.New("degraded: planned maintenance (SetDegraded)")
 	}
-	var (
-		wg      sync.WaitGroup
-		mu      sync.Mutex
-		firstEr string
-	)
-	for name, check := range checks {
-		wg.Add(1)
-		go func(name string, check func(context.Context) error) {
-			defer wg.Done()
-			if err := check(ctx); err != nil {
-				mu.Lock()
-				if firstEr == "" {
-					firstEr = fmt.Sprintf("%s: %v", name, err)
-				}
-				mu.Unlock()
-			}
-		}(name, check)
-	}
-	wg.Wait()
-	if firstEr != "" {
-		return errors.New(firstEr)
-	}
-	return nil
+	return closer.Readiness(checks)(ctx)
 }
 
 // LiveHandler serves static-200 liveness: dependency-free by contract, so a

@@ -32,6 +32,11 @@ func main() {
 
 	c := closer.New(closer.DrainWindow())
 
+	// Structured JSON logs with trace correlation (spec #52, US22): the
+	// stdlib logger routes through slog, so existing log.Printf call sites
+	// render as correlated JSON.
+	obs.SetDefaultLogger("order")
+
 	provs, stopObs := obs.MustRun("order", metricsAddr)
 	c.Defer(func(context.Context) error { stopObs(); return nil })
 
