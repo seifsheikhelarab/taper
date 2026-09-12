@@ -12,6 +12,7 @@ import (
 	"github.com/seifsheikhelarab/taper/pkg/closer"
 	"github.com/seifsheikhelarab/taper/pkg/config"
 	"github.com/seifsheikhelarab/taper/pkg/database"
+	"github.com/seifsheikhelarab/taper/pkg/idemprune"
 	obs "github.com/seifsheikhelarab/taper/pkg/observability"
 	"github.com/seifsheikhelarab/taper/pkg/outboxprune"
 )
@@ -48,6 +49,11 @@ func main() {
 	// ADR-0002: batched outbox retention via the BYPASSRLS sweeper pool
 	// (off unless OUTBOX_PRUNE_ENABLED). Root ctx cancels on shutdown.
 	outboxprune.StartFromEnv(c.Context(), sweeperPool, log.Printf)
+
+	// Spec #52 (US18): retention owner for processed_idempotency_keys,
+	// mirroring the outbox prune approach (off unless
+	// IDEMPOTENCY_PRUNE_ENABLED).
+	idemprune.StartFromEnv(c.Context(), sweeperPool, log.Printf)
 
 	// ADR-0001: nightly stock reconciliation with drift locking (off unless
 	// RECONCILE_ENABLED). Root ctx gives prompt stop on shutdown.

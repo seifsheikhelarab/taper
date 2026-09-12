@@ -15,6 +15,7 @@ import (
 	"github.com/seifsheikhelarab/taper/pkg/config"
 	"github.com/seifsheikhelarab/taper/pkg/database"
 	"github.com/seifsheikhelarab/taper/pkg/grpcx"
+	"github.com/seifsheikhelarab/taper/pkg/idemprune"
 	obs "github.com/seifsheikhelarab/taper/pkg/observability"
 	"github.com/seifsheikhelarab/taper/pkg/outboxprune"
 )
@@ -69,6 +70,10 @@ func main() {
 	// ADR-0002: batched outbox retention via the BYPASSRLS sweeper pool
 	// (off unless OUTBOX_PRUNE_ENABLED).
 	outboxprune.StartFromEnv(c.Context(), sweeperPool, log.Printf)
+
+	// Spec #52 (US18): retention owner for processed_idempotency_keys
+	// (off unless IDEMPOTENCY_PRUNE_ENABLED).
+	idemprune.StartFromEnv(c.Context(), sweeperPool, log.Printf)
 
 	// Readiness (spec #52, B1): Postgres via both roles, stock downstream.
 	provs.RegisterReadiness("postgres", closer.Ping(pool))
