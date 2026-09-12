@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/seifsheikhelarab/taper/pkg/closer"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/seifsheikhelarab/taper/pkg/closer"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"

@@ -60,7 +60,7 @@ func TestDisabledWhenRateOrBurstZero(t *testing.T) {
 func TestIdleEvictionBoundsMap(t *testing.T) {
 	l := NewLimited(10, 5, 3)
 	for i := 0; i < 10; i++ {
-		if !l.Take(string(rune('a'+i))).Allowed {
+		if !l.Take(string(rune('a' + i))).Allowed {
 			t.Fatalf("tenant %d: fresh bucket should pass", i)
 		}
 	}
@@ -88,7 +88,7 @@ func TestEvictionSparesActiveTenants(t *testing.T) {
 	// Churn arrivals: evictions must pick idle buckets, and t1's entry is
 	// refreshed on each Take so it is never the LRU victim.
 	for i := 0; i < 20; i++ {
-		l.Take(string(rune('a'+i)))
+		l.Take(string(rune('a' + i)))
 		l.Take("t1") // refresh + still limited (bucket drains at 1/s)
 	}
 	if got := l.Len(); got != 2 {
