@@ -6,7 +6,6 @@ import (
 	"net"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	resv1 "github.com/seifsheikhelarab/taper/gen/go/reservation/v1"
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
@@ -43,10 +42,11 @@ func main() {
 	c.Defer(func(context.Context) error { sweeperPool.Close(); return nil })
 	c.Defer(func(context.Context) error { pool.Close(); return nil })
 
-	// grpcx.Dial opts into client-side round_robin (docs/research/0002):
-	// Reserve calls are idempotency-keyed, so spreading across replicas is safe.
-	conn, err := grpcx.Dial(stockAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	// grpcx dials opt into client-side round_robin (docs/research/0002):
+	// Reserve calls are idempotency-keyed, so spreading across replicas is
+	// safe. Transport posture comes from the GRPC_TLS_* / GRPC_INSECURE env
+	// surface (spec #52, B2).
+	conn, err := grpcx.DialFromEnv(stockAddr,
 		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {
 		log.Fatalf("dial stock: %v", err)
@@ -58,8 +58,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+	// Listener posture: TLS when GRPC_TLS_CERT/KEY are set, plaintext dev
+	// default otherwise. A misconfiguration exits rather than falling back.
+	tlsOpt, _, err := grpcx.ServerOptionFromEnv()
+	if err != nil {
+		log.Fatalf("tls: %v", err)
+	}
+	opts := []grpc.ServerOption{grpc.ChainUnaryInterceptor(provs.UnaryServerInterceptor())}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
+	}
 
-	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(provs.UnaryServerInterceptor()))
+	srv := grpc.NewServer(opts...)
 	resv1.RegisterReservationServiceServer(srv, reservationservice.NewServer(pool, stock))
 
 	// TTL sweeper: the independent backstop for expired holds. Root ctx

@@ -11,10 +11,10 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/seifsheikhelarab/taper/internal/gateway"
 	"github.com/seifsheikhelarab/taper/pkg/auth"
@@ -89,9 +89,20 @@ func main() {
 
 	srv := &http.Server{Addr: addr, Handler: core.Middleware(mux), ReadHeaderTimeout: 5 * time.Second}
 
+	// TLS termination (spec #52, US11): GATEWAY_TLS_CERT/KEY enable
+	// ServeTLS; plaintext otherwise. Half-set is a boot failure.
+	serve := func() error { return srv.ListenAndServe() }
+	if cert, key := os.Getenv("GATEWAY_TLS_CERT"), os.Getenv("GATEWAY_TLS_KEY"); cert != "" || key != "" {
+		if cert == "" || key == "" {
+			log.Fatalf("GATEWAY_TLS_CERT and GATEWAY_TLS_KEY must be set together")
+		}
+		serve = func() error { return srv.ListenAndServeTLS(cert, key) }
+		log.Printf("gateway TLS enabled")
+	}
+
 	log.Printf("gateway listening on %s (stock=%s reservation=%s order=%s)", addr, stockAddr, resAddr, orderAddr)
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.ListenAndServe() }()
+	go func() { serveErr <- serve() }()
 
 	// Drain runs after the conn-closing Defer above in LIFO order; the
 	// server must stop accepting before its conns close, so register the
@@ -114,8 +125,12 @@ func dial(addr string, provs *obs.Providers) *grpc.ClientConn {
 	// DNS replicas are addressed per-call, so `docker compose --profile
 	// containers up --scale stock=2` (or k8s replicas) is load-bearing
 	// without any proxy hop.
-	conn, err := grpcx.Dial(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	// grpcx dials opt into client-side round_robin (docs/research/0002):
+	// DNS replicas are addressed per-call, so `docker compose --profile
+	// containers up --scale stock=2` (or k8s replicas) is load-bearing
+	// without any proxy hop. Transport posture comes from the GRPC_TLS_* /
+	// GRPC_INSECURE env surface (spec #52, B2).
+	conn, err := grpcx.DialFromEnv(addr,
 		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {
 		log.Fatalf("dial %s: %v", addr, err)

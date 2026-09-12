@@ -12,6 +12,7 @@ import (
 	"github.com/seifsheikhelarab/taper/pkg/closer"
 	"github.com/seifsheikhelarab/taper/pkg/config"
 	"github.com/seifsheikhelarab/taper/pkg/database"
+	"github.com/seifsheikhelarab/taper/pkg/grpcx"
 	"github.com/seifsheikhelarab/taper/pkg/idemprune"
 	obs "github.com/seifsheikhelarab/taper/pkg/observability"
 	"github.com/seifsheikhelarab/taper/pkg/outboxprune"
@@ -45,6 +46,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+	// Listener posture: TLS when GRPC_TLS_CERT/KEY are set, plaintext dev
+	// default otherwise. A misconfiguration exits rather than falling back.
+	tlsOpt, _, err := grpcx.ServerOptionFromEnv()
+	if err != nil {
+		log.Fatalf("tls: %v", err)
+	}
+	opts := []grpc.ServerOption{grpc.ChainUnaryInterceptor(provs.UnaryServerInterceptor())}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
+	}
 
 	// ADR-0002: batched outbox retention via the BYPASSRLS sweeper pool
 	// (off unless OUTBOX_PRUNE_ENABLED). Root ctx cancels on shutdown.
@@ -63,7 +74,7 @@ func main() {
 	provs.RegisterReadiness("postgres", closer.Ping(pool))
 	provs.RegisterReadiness("postgres-sweeper", closer.Ping(sweeperPool))
 
-	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(provs.UnaryServerInterceptor()))
+	srv := grpc.NewServer(opts...)
 	stockv1.RegisterStockServiceServer(srv, stockservice.NewServer(pool))
 
 	log.Printf("stock service listening on %s", addr)

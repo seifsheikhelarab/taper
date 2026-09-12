@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	orderv1 "github.com/seifsheikhelarab/taper/gen/go/order/v1"
 	resv1 "github.com/seifsheikhelarab/taper/gen/go/reservation/v1"
@@ -47,16 +46,16 @@ func main() {
 	c.Defer(func(context.Context) error { sweeperPool.Close(); return nil })
 	c.Defer(func(context.Context) error { pool.Close(); return nil })
 
-	// grpcx.Dial opts into client-side round_robin (docs/research/0002):
-	// saga steps are idempotency-keyed, so spreading across replicas is safe.
-	resConn, err := grpcx.Dial(resAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	// grpcx dials opt into client-side round_robin (docs/research/0002):
+	// saga steps are idempotency-keyed, so spreading across replicas is
+	// safe. Transport posture comes from the GRPC_TLS_* / GRPC_INSECURE env
+	// surface (spec #52, B2).
+	resConn, err := grpcx.DialFromEnv(resAddr,
 		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {
 		log.Fatalf("dial reservation: %v", err)
 	}
-	stockConn, err := grpcx.Dial(stockAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	stockConn, err := grpcx.DialFromEnv(stockAddr,
 		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {
 		log.Fatalf("dial stock: %v", err)
@@ -71,6 +70,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+	// Listener posture: TLS when GRPC_TLS_CERT/KEY are set, plaintext dev
+	// default otherwise. A misconfiguration exits rather than falling back.
+	tlsOpt, tlsOn, err := grpcx.ServerOptionFromEnv()
+	if err != nil {
+		log.Fatalf("tls: %v", err)
+	}
+	opts := []grpc.ServerOption{grpc.ChainUnaryInterceptor(provs.UnaryServerInterceptor())}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
+	}
+	_ = tlsOn
 
 	// ADR-0002: batched outbox retention via the BYPASSRLS sweeper pool
 	// (off unless OUTBOX_PRUNE_ENABLED).
@@ -110,7 +120,7 @@ func main() {
 		}()
 	}
 
-	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(provs.UnaryServerInterceptor()))
+	srv := grpc.NewServer(opts...)
 	orderv1.RegisterOrderServiceServer(srv, saga)
 
 	// Readiness (spec #52, B1): Postgres via both roles, both downstreams.

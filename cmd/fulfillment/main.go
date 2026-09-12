@@ -8,7 +8,6 @@ import (
 	"log"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	stockv1 "github.com/seifsheikhelarab/taper/gen/go/stock/v1"
 	"github.com/seifsheikhelarab/taper/internal/fulfillment"
@@ -29,11 +28,11 @@ func main() {
 	provs, stopObs := obs.MustRun("fulfillment", metricsAddr)
 	c.Defer(func(context.Context) error { stopObs(); return nil })
 
-	// grpcx.Dial opts into client-side round_robin (docs/research/0002):
+	// grpcx dials opt into client-side round_robin (docs/research/0002):
 	// FulfillStock is idempotency-keyed, so per-call spreading across stock
-	// replicas is safe.
-	conn, err := grpcx.Dial(stockAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	// replicas is safe. Transport posture comes from the GRPC_TLS_* /
+	// GRPC_INSECURE env surface (spec #52, B2).
+	conn, err := grpcx.DialFromEnv(stockAddr,
 		grpc.WithChainUnaryInterceptor(provs.UnaryClientInterceptor()))
 	if err != nil {
 		log.Fatalf("dial stock: %v", err)
