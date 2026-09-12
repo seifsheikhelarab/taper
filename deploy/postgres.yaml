@@ -1,0 +1,97 @@
+# Single Postgres holding every service database (taper_db, reservation_db,
+# order_db, channelsync_db), mirroring compose. The image is the Debezium
+# build for CDC (logical decoding plugins). PVC + volume: for production,
+# pair with the backup/PITR tooling in docs/runbooks/backup-restore.md.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: taper
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: quay.io/debezium/postgres:16-alpine
+          ports:
+            - containerPort: 5432
+              name: pg
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: taper-secrets, key: POSTGRES_SUPERUSER_PASSWORD }
+            - name: POSTGRES_DB
+              value: taper_db
+            # Logical decoding for Debezium (compose parity).
+            - name: POSTGRES_INITDB_ARGS
+              value: "--data-checksums"
+          args:
+            - postgres
+            - -c
+            - wal_level=logical
+            - -c
+            - max_replication_slots=4
+            - -c
+            - max_wal_senders=4
+            - -c
+            - output_plugin_libraries=pgoutput,decoderbufs
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "taper_db"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "taper_db"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "2", memory: 2Gi }
+      volumes:
+        - name: init
+          configMap: { name: taper-postgres-init }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: taper
+spec:
+  selector: { app: postgres }
+  ports:
+    - port: 5432
+      targetPort: pg
+---
+# The init scripts (create the four databases + roles) ship as a ConfigMap;
+# sync from db/init/ when they change:
+#   kubectl -n taper create configmap taper-postgres-init --from-file=db/init/
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: taper-postgres-init
+  namespace: taper
+data:
+  README: "Populate from db/init/ via: kubectl -n taper create configmap taper-postgres-init --from-file=db/init/ --dry-run=client -o yaml | kubectl apply -f -"
