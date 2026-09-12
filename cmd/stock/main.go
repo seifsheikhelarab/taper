@@ -53,6 +53,10 @@ func main() {
 	// RECONCILE_ENABLED). Root ctx gives prompt stop on shutdown.
 	go stockservice.New(sweeperPool, log.Printf).Run(c.Context())
 
+	// Readiness (spec #52, B1): Postgres reachable via both roles.
+	provs.RegisterReadiness("postgres", closer.Ping(pool))
+	provs.RegisterReadiness("postgres-sweeper", closer.Ping(sweeperPool))
+
 	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(provs.UnaryServerInterceptor()))
 	stockv1.RegisterStockServiceServer(srv, stockservice.NewServer(pool))
 

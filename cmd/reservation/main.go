@@ -70,6 +70,11 @@ func main() {
 	// (off unless OUTBOX_PRUNE_ENABLED).
 	outboxprune.StartFromEnv(c.Context(), sweeperPool, log.Printf)
 
+	// Readiness (spec #52, B1): Postgres via both roles, stock downstream.
+	provs.RegisterReadiness("postgres", closer.Ping(pool))
+	provs.RegisterReadiness("postgres-sweeper", closer.Ping(sweeperPool))
+	provs.RegisterReadiness("stock", closer.GRPCReach(conn))
+
 	log.Printf("reservation service listening on %s", addr)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(lis) }()

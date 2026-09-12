@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"google.golang.org/grpc"
@@ -46,6 +47,12 @@ func main() {
 		Topic:   "order.events",
 		GroupID: config.EnvOr("FULFILLMENT_GROUP_ID", "fulfillment"),
 	}, log.Printf)
+
+	// Readiness (spec #52, B1): Kafka reachable, stock downstream reachable.
+	for i, b := range closer.KafkaBrokers(brokers) {
+		provs.RegisterReadiness(fmt.Sprintf("kafka-%d", i), closer.TCPDial(b))
+	}
+	provs.RegisterReadiness("stock", closer.GRPCReach(conn))
 
 	log.Printf("fulfillment consuming order.events from %s", brokers)
 	consumeErr := make(chan error, 1)

@@ -3,6 +3,8 @@ package closer
 import (
 	"context"
 	"fmt"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +47,31 @@ func Readiness(checks map[string]func(context.Context) error) func(context.Conte
 		}
 		return nil
 	}
+}
+
+// TCPDial returns a readiness check that dials addr (host:port) and closes
+// the connection: the Kafka connectivity check for consumers, and a generic
+// reachability probe for TCP dependencies.
+func TCPDial(addr string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		d := net.Dialer{}
+		conn, err := d.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			return err
+		}
+		return conn.Close()
+	}
+}
+
+// KafkaBrokers parses a comma-separated KAFKA_BROKERS value into addresses.
+func KafkaBrokers(v string) []string {
+	var addrs []string
+	for _, a := range strings.Split(v, ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			addrs = append(addrs, a)
+		}
+	}
+	return addrs
 }
 
 // GRPCHealth returns a readiness check for a dialed gRPC connection using

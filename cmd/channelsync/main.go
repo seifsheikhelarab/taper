@@ -5,7 +5,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -24,7 +26,7 @@ func main() {
 
 	c := closer.New(closer.DrainWindow())
 
-	_, stopObs := obs.MustRun("channelsync", metricsAddr)
+	provs, stopObs := obs.MustRun("channelsync", metricsAddr)
 	c.Defer(func(context.Context) error { stopObs(); return nil })
 
 	pool, err := pgxpool.New(context.Background(), dsn)
@@ -42,6 +44,17 @@ func main() {
 		Topic:   "stock.events",
 		GroupID: config.EnvOr("CHANNELSYNC_GROUP_ID", "channelsync"),
 	}, log.Printf)
+
+	// Readiness (spec #52, B1): Kafka reachable, Postgres reachable.
+	for i, b := range closer.KafkaBrokers(brokers) {
+		_, _ = i, b
+		provs.RegisterReadiness(fmt.Sprintf("kafka-%d", i), closer.TCPDial(b))
+	}
+	provs.RegisterReadiness("postgres", func(ctx context.Context) error {
+		pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		return pool.Ping(pctx)
+	})
 
 	log.Printf("channelsync consuming stock.events from %s", brokers)
 	consumeErr := make(chan error, 1)

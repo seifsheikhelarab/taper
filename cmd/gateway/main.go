@@ -75,20 +75,12 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 	// Readiness (spec #52, B1): every downstream gRPC dependency must be
-	// reachable. /healthz stays dependency-free liveness.
-	readiness := closer.Readiness(map[string]func(context.Context) error{
-		"stock":       closer.GRPCReach(stockConn),
-		"reservation": closer.GRPCReach(resConn),
-		"order":       closer.GRPCReach(orderConn),
-	})
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		if err := readiness(r.Context()); err != nil {
-			http.Error(w, "not ready: "+err.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready"))
-	})
+	// reachable. /readyz on the API listener and the admin listener share
+	// the same registry; /healthz stays dependency-free liveness.
+	provs.RegisterReadiness("stock", closer.GRPCReach(stockConn))
+	provs.RegisterReadiness("reservation", closer.GRPCReach(resConn))
+	provs.RegisterReadiness("order", closer.GRPCReach(orderConn))
+	mux.Handle("GET /readyz", provs.ReadyHandler())
 	gateway.NewStockRoutes(core, stockConn).Mount(mux)
 	gateway.NewReservationRoutes(core, resConn).Mount(mux)
 	gateway.NewOrderRoutes(core, orderConn).Mount(mux)

@@ -12,6 +12,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -50,6 +51,13 @@ type Config struct {
 type Providers struct {
 	Metrics *Metrics
 
+	// Readiness registry (spec #52, B1): binaries register dependency
+	// checks at boot (Postgres ping, downstream gRPC health, Kafka dial);
+	// the admin listener's /readyz runs them per request.
+	mu        sync.Mutex
+	readiness map[string]func(context.Context) error
+	degraded  bool
+
 	shutdowns []func(context.Context) error
 }
 
@@ -60,7 +68,7 @@ func Setup(ctx context.Context, cfg Config) (*Providers, error) {
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{}, propagation.Baggage{}))
 
-	p := &Providers{Metrics: NewMetrics()}
+	p := &Providers{Metrics: NewMetrics(), readiness: map[string]func(context.Context) error{}}
 	res, err := resource.Merge(resource.Default(),
 		resource.NewSchemaless(attribute.String("service.name", cfg.ServiceName)))
 	if err != nil {
@@ -117,11 +125,89 @@ func (p *Providers) Shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// RegisterReadiness adds a named dependency check consulted by /readyz.
+// Safe to call at any time; checks run concurrently per request.
+func (p *Providers) RegisterReadiness(name string, check func(context.Context) error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.readiness[name] = check
+}
+
+// SetDegraded flips readiness to unhealthy without touching liveness: the
+// operational lever for planned dependency maintenance (drain upstream
+// traffic before the dependency drops). Documented in the ops runbook.
+func (p *Providers) SetDegraded(degraded bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.degraded = degraded
+}
+
+// readyError describes why the process is not ready.
+func (p *Providers) readyError(ctx context.Context) error {
+	p.mu.Lock()
+	degraded := p.degraded
+	checks := make(map[string]func(context.Context) error, len(p.readiness))
+	for name, check := range p.readiness {
+		checks[name] = check
+	}
+	p.mu.Unlock()
+
+	if degraded {
+		return errors.New("degraded: planned maintenance (SetDegraded)")
+	}
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		firstEr string
+	)
+	for name, check := range checks {
+		wg.Add(1)
+		go func(name string, check func(context.Context) error) {
+			defer wg.Done()
+			if err := check(ctx); err != nil {
+				mu.Lock()
+				if firstEr == "" {
+					firstEr = fmt.Sprintf("%s: %v", name, err)
+				}
+				mu.Unlock()
+			}
+		}(name, check)
+	}
+	wg.Wait()
+	if firstEr != "" {
+		return errors.New(firstEr)
+	}
+	return nil
+}
+
+// LiveHandler serves static-200 liveness: dependency-free by contract, so a
+// deadlocked process is distinguishable from one waiting on a downstream.
+func (p *Providers) LiveHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("live"))
+	})
+}
+
+// ReadyHandler serves readiness: 200 only when not degraded and every
+// registered dependency check passes within its request context.
+func (p *Providers) ReadyHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := p.readyError(r.Context()); err != nil {
+			http.Error(w, "not ready: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
+	})
+}
+
 // MustRun boots observability for one service binary: Setup with the
 // service's name and the OTEL_EXPORTER_OTLP_ENDPOINT env (empty = no-op
-// providers), serves the Prometheus metrics endpoint on metricsAddr, and
-// returns a cleanup func that closes the metrics server and flushes traces.
-// Call cleanup via defer; main's runtime is the metrics server lifecycle.
+// providers), serves the admin listener on metricsAddr (/metrics, plus
+// /healthz liveness and /readyz readiness), and returns a cleanup func that
+// closes the server and flushes traces.
+// Call cleanup via defer; main's runtime is the admin server lifecycle.
 func MustRun(service, metricsAddr string) (*Providers, func()) {
 	provs, err := Setup(context.Background(), Config{
 		ServiceName:  service,
@@ -130,7 +216,11 @@ func MustRun(service, metricsAddr string) (*Providers, func()) {
 	if err != nil {
 		log.Fatalf("observability setup: %v", err)
 	}
-	metricsSrv := MetricsServer(provs.Metrics, metricsAddr)
+	adminMux := http.NewServeMux()
+	adminMux.Handle("/metrics", provs.Metrics.Handler())
+	adminMux.Handle("/healthz", provs.LiveHandler())
+	adminMux.Handle("/readyz", provs.ReadyHandler())
+	metricsSrv := &http.Server{Addr: metricsAddr, Handler: adminMux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		log.Printf("%s metrics listening on %s", service, metricsAddr)
 		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

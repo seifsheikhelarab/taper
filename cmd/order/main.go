@@ -108,6 +108,12 @@ func main() {
 	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(provs.UnaryServerInterceptor()))
 	orderv1.RegisterOrderServiceServer(srv, saga)
 
+	// Readiness (spec #52, B1): Postgres via both roles, both downstreams.
+	provs.RegisterReadiness("postgres", closer.Ping(pool))
+	provs.RegisterReadiness("postgres-sweeper", closer.Ping(sweeperPool))
+	provs.RegisterReadiness("reservation", closer.GRPCReach(resConn))
+	provs.RegisterReadiness("stock", closer.GRPCReach(stockConn))
+
 	log.Printf("order service listening on %s", addr)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(lis) }()
