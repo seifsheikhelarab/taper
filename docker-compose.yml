@@ -241,7 +241,10 @@ services:
     ports:
       - "8080:8080"
     environment:
-      GATEWAY_JWT_SECRET: taper-sandbox-secret
+      # Spec #52 (US29): no dev secret default ships. GATEWAY_JWT_SECRET must
+      # come from the environment (.env or export); without it the gateway
+      # exits at boot with a clear error instead of starting insecure.
+      GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET:-}
       STOCK_ADDR: stock:50051
       RESERVATION_ADDR: reservation:50052
       ORDER_ADDR: order:50053

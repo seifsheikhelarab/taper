@@ -99,7 +99,7 @@ func errorFromGRPC(err error) *httpError {
 
 // Core carries the gateway's shared dependencies and per-backend breakers.
 type Core struct {
-	Verifier *auth.Sandbox
+	Verifier *auth.JWT
 	Limiter  *ratelimit.Limiter
 	// One breaker per downstream service; an open breaker fails fast with
 	// 503 instead of queuing.
@@ -122,6 +122,41 @@ func (c *Core) authorize(r *http.Request) (auth.Claims, *httpError) {
 		return auth.Claims{}, &httpError{status: http.StatusUnauthorized, code: "unauthenticated", message: "invalid token"}
 	}
 	return claims, nil
+}
+
+// operationFor maps method+path to the operation a token must cover (spec
+// #52, US9: least privilege at the surface). Non-API paths need no op; the
+// paths under /v1/ map by area and method. Unknown /v1/ shapes deny.
+func operationFor(method, path string) (string, bool) {
+	seg := strings.Split(strings.Trim(path, "/"), "/")
+	if len(seg) < 2 || seg[0] != "v1" {
+		return "", false
+	}
+	area := seg[1]
+	read := method == http.MethodGet || method == http.MethodHead
+	switch area {
+	case "orders":
+		if read {
+			return auth.OpOrderRead, true
+		}
+		return auth.OpOrderMutate, true
+	case "stock":
+		if read {
+			return auth.OpStockRead, true
+		}
+		// UnlockStockForAudit clears an audit lock: admin-level.
+		if len(seg) >= 3 && seg[2] == "unlock" {
+			return auth.OpStockAdmin, true
+		}
+		return auth.OpStockWrite, true
+	case "reservations":
+		if read {
+			return auth.OpReservationRead, true
+		}
+		return auth.OpReservationMutate, true
+	default:
+		return "", false
+	}
 }
 
 // admit enforces the per-tenant rate limit.
@@ -214,19 +249,27 @@ func (c *Core) publishBreaker(dep string, br *circuitbreaker.Breaker) {
 	c.BreakerGauge.SetBreakerState(dep, br.State())
 }
 
-// Middleware chains auth and rate limiting around the route mux. Every
-// route requires a verified token; /healthz is exempt (liveness probes and
-// the load harness have no token). Rate limiting still applies to all
-// authenticated traffic.
+// Middleware chains auth, RBAC, and rate limiting around the route mux.
+// Every route requires a verified token whose role covers the operation;
+// /healthz and /readyz are exempt (probes have no token). Rate limiting
+// still applies to all authenticated traffic.
 func (c *Core) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			next.ServeHTTP(w, r)
 			return
 		}
 		claims, httpErr := c.authorize(r)
 		if httpErr != nil {
 			httpErr.write(w)
+			return
+		}
+		if op, ok := operationFor(r.Method, r.URL.Path); ok && !claims.Allows(op) {
+			(&httpError{
+				status:  http.StatusForbidden,
+				code:    "permission_denied",
+				message: "token role does not permit this operation",
+			}).write(w)
 			return
 		}
 		if !c.admit(w, claims.TenantID) {

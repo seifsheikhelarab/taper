@@ -3,10 +3,14 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,7 +52,21 @@ func newGateway(t *testing.T, e *testEnv, rate float64, burst float64) *httptest
 
 func gatewayToken(t *testing.T, tenant string) string {
 	t.Helper()
-	tok, err := auth.NewSandbox([]byte(gatewaySecret)).Issue(context.Background(), tenant, time.Minute)
+	return gatewayTokenRole(t, tenant, auth.RoleReadWrite)
+}
+
+func gatewayTokenRole(t *testing.T, tenant, role string) string {
+	t.Helper()
+	tok, err := auth.NewJWT([]byte(gatewaySecret)).Issue(context.Background(), tenant, time.Minute, auth.IssueOptions{Role: role})
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	return tok
+}
+
+func gatewayTokenScopes(t *testing.T, tenant, role string, scopes []string) string {
+	t.Helper()
+	tok, err := auth.NewJWT([]byte(gatewaySecret)).Issue(context.Background(), tenant, time.Minute, auth.IssueOptions{Role: role, Scopes: scopes})
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}
@@ -217,4 +235,98 @@ func TestGatewayRateLimit(t *testing.T) {
 	if status != http.StatusTooManyRequests {
 		t.Fatalf("third request: %d, want 429", status)
 	}
+}
+
+// RBAC through the public surface (spec #52, US8/US9): a scoped read-only
+// token is rejected for mutation (403 before any downstream call) but reads
+// pass; forged and expired tokens are 401.
+func TestGatewayRBACScopedTokenRejection(t *testing.T) {
+	e := setup(t)
+	srv := newGateway(t, e, 0, 0)
+	readOnly := gatewayTokenRole(t, tenantAUUID, auth.RoleReadOnly)
+	rw := gatewayTokenRole(t, tenantAUUID, auth.RoleReadWrite)
+
+	// Read-only token can read orders (404 is fine: the order does not
+	// exist; the point is the request reached the route, not the middleware).
+	status, _ := restCall(t, srv, "GET", "/v1/orders/rbac-missing", readOnly, "", nil)
+	if status == http.StatusForbidden || status == http.StatusUnauthorized {
+		t.Fatalf("read-only read: %d, want a non-auth/non-authz status", status)
+	}
+
+	// Read-only token cannot mutate: 403 with no downstream effect.
+	status, body := restCall(t, srv, "POST", "/v1/stock/adjust", readOnly,
+		`{"sku_id":"GW-RBAC","warehouse_id":"WH-1","quantity_delta":5,"reason":"test","source":"test"}`, nil)
+	if status != http.StatusForbidden {
+		t.Fatalf("read-only mutate: %d (%v), want 403", status, body)
+	}
+	available, _, _ := e.stockLevel(t, tenantAUUID, "GW-RBAC", "WH-1")
+	if available != 0 {
+		t.Fatalf("available = %d after rejected mutation, want 0", available)
+	}
+
+	// Explicit scopes narrow below the role: stock-write scope missing.
+	scoped := gatewayTokenScopes(t, tenantAUUID, auth.RoleReadWrite, []string{auth.OpOrderMutate})
+	status, _ = restCall(t, srv, "POST", "/v1/stock/adjust", scoped,
+		`{"sku_id":"GW-RBAC","warehouse_id":"WH-1","quantity_delta":5,"reason":"test","source":"test"}`, nil)
+	if status != http.StatusForbidden {
+		t.Fatalf("scoped token beyond scope: %d, want 403", status)
+	}
+
+	// A read-write token sails through the same mutation.
+	status, _ = restCall(t, srv, "POST", "/v1/stock/adjust", rw,
+		`{"sku_id":"GW-RBAC","warehouse_id":"WH-1","quantity_delta":5,"reason":"test","source":"test"}`, nil)
+	if status != http.StatusOK {
+		t.Fatalf("read-write mutate: %d, want 200", status)
+	}
+
+	// Forged signature: valid shape, wrong key.
+	forged, err := auth.NewJWT([]byte("not-the-secret")).Issue(context.Background(), tenantAUUID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _ = restCall(t, srv, "GET", "/v1/orders/rbac-missing", forged, "", nil)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("forged token: %d, want 401", status)
+	}
+
+	// Expired token.
+	expired := func() string {
+		tok, err := auth.NewJWT([]byte(gatewaySecret)).Issue(context.Background(), tenantAUUID, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Rewrite exp into the past, re-signing with the real secret.
+		return reSignExpired(t, tok)
+	}()
+	status, _ = restCall(t, srv, "GET", "/v1/orders/rbac-missing", expired, "", nil)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expired token: %d, want 401", status)
+	}
+}
+
+// reSignExpired decodes tok's payload, sets exp in the past, and re-signs
+// with the gateway secret so only the expiry differs from a valid token.
+func reSignExpired(t *testing.T, tok string) string {
+	t.Helper()
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		t.Fatalf("token segments = %d, want 3", len(parts))
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatal(err)
+	}
+	claims["exp"] = time.Now().Add(-time.Minute).Unix()
+	updated, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := parts[0] + "." + base64.RawURLEncoding.EncodeToString(updated)
+	mac := hmac.New(sha256.New, []byte(gatewaySecret))
+	mac.Write([]byte(body))
+	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }

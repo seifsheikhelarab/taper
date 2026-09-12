@@ -20,16 +20,15 @@ import (
 	"github.com/seifsheikhelarab/taper/pkg/ratelimit"
 )
 
-func newTestCore(t *testing.T) (*Core, *auth.Sandbox) {
+func newTestCore(t *testing.T) (*Core, *auth.JWT) {
 	t.Helper()
-	s := auth.NewSandbox([]byte("test-secret"))
+	verifier := auth.NewJWT([]byte("test-secret"))
 	return &Core{
-		Verifier:           s,
+		Verifier:           verifier,
 		Limiter:            ratelimit.New(1000, 1000),
 		StockBreaker:       circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: time.Second}),
-		ReservationBreaker: circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: time.Second}),
-		OrderBreaker:       circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: time.Second}),
-	}, s
+		ReservationBreaker: circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: time.Second}), OrderBreaker: circuitbreaker.New(circuitbreaker.Config{FailureThreshold: 3, Cooldown: time.Second}),
+	}, verifier
 }
 
 func doJSON(t *testing.T, h http.Handler, method, target, token, body string, hdr map[string]string) (*httptest.ResponseRecorder, auth.Claims) {
@@ -86,8 +85,8 @@ func TestAuthRequired(t *testing.T) {
 }
 
 func TestTenantInjectionAndAntiSpoofing(t *testing.T) {
-	c, s := newTestCore(t)
-	tok, _ := s.Issue(context.Background(), "tenant-A", time.Minute)
+	c, verifier := newTestCore(t)
+	tok, _ := verifier.Issue(context.Background(), "tenant-A", time.Minute)
 
 	var captured *orderv1.CreateOrderRequest
 	mux := http.NewServeMux()
@@ -125,9 +124,9 @@ func TestTenantInjectionAndAntiSpoofing(t *testing.T) {
 }
 
 func TestRateLimitEngages(t *testing.T) {
-	c, s := newTestCore(t)
+	c, verifier := newTestCore(t)
 	c.Limiter = ratelimit.New(1, 2) // 1/s, burst 2
-	tok, _ := s.Issue(context.Background(), "tenant-A", time.Minute)
+	tok, _ := verifier.Issue(context.Background(), "tenant-A", time.Minute)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/x", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	h := c.Middleware(mux)
@@ -148,8 +147,8 @@ func TestRateLimitEngages(t *testing.T) {
 }
 
 func TestOpenBreakerFailsFast503(t *testing.T) {
-	c, s := newTestCore(t)
-	tok, _ := s.Issue(context.Background(), "tenant-A", time.Minute)
+	c, verifier := newTestCore(t)
+	tok, _ := verifier.Issue(context.Background(), "tenant-A", time.Minute)
 	for i := 0; i < 3; i++ {
 		c.OrderBreaker.RecordFailure()
 	}
@@ -206,8 +205,8 @@ func TestInvokeMapsGRPCErrorsAndRecordsBreaker(t *testing.T) {
 }
 
 func TestMalformedJSONRejected(t *testing.T) {
-	c, s := newTestCore(t)
-	tok, _ := s.Issue(context.Background(), "tenant-A", time.Minute)
+	c, verifier := newTestCore(t)
+	tok, _ := verifier.Issue(context.Background(), "tenant-A", time.Minute)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/orders", func(w http.ResponseWriter, r *http.Request) {
 		req := &orderv1.CreateOrderRequest{}

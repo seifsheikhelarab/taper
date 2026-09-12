@@ -33,7 +33,7 @@ export const options = {
 };
 
 const tenant = opt('TENANT', '11111111-1111-4111-8111-111111111111');
-const token = mintToken(tenant, opt('SECRET', 'taper-sandbox-secret'));
+const token = mintToken(tenant, opt('SECRET', 'load-secret'));
 const base = opt('GATEWAY', 'http://localhost:8080');
 // SPREAD_SKUS>1 distributes load across that many seeded SKUs (realistic
 // traffic). SPREAD_SKUS=1 concentrates every request on LOAD-SKU, turning
