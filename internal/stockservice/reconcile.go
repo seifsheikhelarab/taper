@@ -55,6 +55,35 @@ func New(pool *pgxpool.Pool, log func(format string, args ...any)) *Worker {
 	return &Worker{pool: pool, log: log}
 }
 
+// reasonSum mirrors one SumDeltasByReason row for the pure derivation
+// function (decoupled from the sqlc-generated type for unit testing).
+type reasonSum struct {
+	Reason     string
+	TotalDelta int64
+}
+
+// deriveBuckets applies the event-derivation contract (the reason ->
+// bucket table in this file's header) to summed event deltas. Extracted
+// for unit testing (spec #52, T7): this function IS the drift-detection
+// contract; a regression here mis-derives every reconciliation pass.
+func deriveBuckets(reasons []reasonSum) (avail, reserved, allocated int64) {
+	for _, r := range reasons {
+		switch r.Reason {
+		case "allocate":
+			reserved -= r.TotalDelta
+			allocated += r.TotalDelta
+		case "fulfill":
+			allocated -= r.TotalDelta
+		case "reserve", "release":
+			reserved -= r.TotalDelta
+			avail += r.TotalDelta
+		default:
+			avail += r.TotalDelta
+		}
+	}
+	return avail, reserved, allocated
+}
+
 // Run blocks, reconciling once at startup and then on the interval from
 // RECONCILE_INTERVAL (default 24h), until ctx is cancelled. Does nothing
 // unless RECONCILE_ENABLED is truthy.
@@ -118,21 +147,11 @@ func (w *Worker) Reconcile(ctx context.Context) ([]Drift, error) {
 		if err != nil {
 			return nil, err
 		}
-		var avail, reserved, allocated int64
+		rsn := make([]reasonSum, 0, len(reasons))
 		for _, r := range reasons {
-			switch r.Reason {
-			case "allocate":
-				reserved -= r.TotalDelta
-				allocated += r.TotalDelta
-			case "fulfill":
-				allocated -= r.TotalDelta
-			case "reserve", "release":
-				reserved -= r.TotalDelta
-				avail += r.TotalDelta
-			default:
-				avail += r.TotalDelta
-			}
+			rsn = append(rsn, reasonSum{Reason: r.Reason, TotalDelta: r.TotalDelta})
 		}
+		avail, reserved, allocated := deriveBuckets(rsn)
 		d := Drift{
 			TenantID:          loc.TenantID.String(),
 			SKUID:             loc.SkuID,
