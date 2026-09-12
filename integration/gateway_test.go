@@ -253,15 +253,15 @@ func TestGatewayRBACScopedTokenRejection(t *testing.T) {
 		t.Fatalf("read-only read: %d, want a non-auth/non-authz status", status)
 	}
 
-	// Read-only token cannot mutate: 403 with no downstream effect.
+	// Read-only token cannot mutate: 403 with no downstream effect. The
+	// stock row must not exist at all - a 403 leaves no writes behind.
 	status, body := restCall(t, srv, "POST", "/v1/stock/adjust", readOnly,
 		`{"sku_id":"GW-RBAC","warehouse_id":"WH-1","quantity_delta":5,"reason":"test","source":"test"}`, nil)
 	if status != http.StatusForbidden {
 		t.Fatalf("read-only mutate: %d (%v), want 403", status, body)
 	}
-	available, _, _ := e.stockLevel(t, tenantAUUID, "GW-RBAC", "WH-1")
-	if available != 0 {
-		t.Fatalf("available = %d after rejected mutation, want 0", available)
+	if _, _, _, exists := e.stockLevelOk(t, tenantAUUID, "GW-RBAC", "WH-1"); exists {
+		t.Fatal("stock row exists after rejected mutation, want none")
 	}
 
 	// Explicit scopes narrow below the role: stock-write scope missing.
