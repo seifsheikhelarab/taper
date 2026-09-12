@@ -12,8 +12,9 @@ rehearsed).
 | SEV2 | Order path degraded (sagas failing, breakers open) or one consumer down | page on-call, 15 min ack |
 | SEV3 | Single replica unhealthy, background job failures with retries | ticket next business day |
 
-SEV1 triggers the invariant audit (`scripts/audit-oversell.sql`) **before**
-any fix is declared done.
+SEV1 triggers the oversell audit (`scripts/audit-oversell.sql` — no negative
+buckets) **before** any fix is declared done; pair it with the reconciler's
+drift check for the full Unit Accounting picture.
 
 ## First 5 minutes (any page)
 
@@ -72,6 +73,7 @@ Next:   <next update at +15m or sooner>
 
 ## Post-incident
 
-- Run `scripts/audit-oversell.sql` and attach output.
+- Run `scripts/audit-oversell.sql` (negative-bucket audit) and attach output;
+  note it does not clear the reconciler's drift domain.
 - Timeline from structured logs (JSON, trace-correlated) + alerts.
 - Blameless writeup within 48h; action items as tickets.

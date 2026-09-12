@@ -59,8 +59,10 @@ off-host (rsync/S3) on a timer. Production: run the same flags in
 ## Restore verification (never skip)
 
 ```bash
-# Invariant audit (CONTEXT.md Unit Accounting): available + allocated ==
-# seeded, reserved == 0 after quiescence.
+# Oversell audit: no negative buckets (available/reserved/allocated >= 0,
+# ADR-0001). The full Unit Accounting cross-check (available + allocated ==
+# seeded, reserved == 0 after quiescence) is the reconciliation worker's
+# drift domain — a clean audit here does not clear drift.
 psql -d taper_db -f scripts/audit-oversell.sql
 
 # Row counts per DB vs. the pre-incident snapshot counts.
