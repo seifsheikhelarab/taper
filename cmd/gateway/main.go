@@ -11,7 +11,6 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"google.golang.org/grpc"
@@ -32,15 +31,18 @@ func main() {
 	stockAddr := config.EnvOr("STOCK_ADDR", "localhost:50051")
 	resAddr := config.EnvOr("RESERVATION_ADDR", "localhost:50052")
 	orderAddr := config.EnvOr("ORDER_ADDR", "localhost:50053")
-	secret := os.Getenv("GATEWAY_JWT_SECRET")
-	if secret == "" {
-		// Spec #52, B2: no compile-time default secret in any path. A
-		// misconfiguration must be loud rather than insecure by default.
-		log.Fatalf("GATEWAY_JWT_SECRET is required: set it explicitly (see .env.example); no default is applied")
-	}
-	rate := config.EnvOrFloat("GATEWAY_RATE_PER_TENANT", 10)
-	burst := config.EnvOrFloat("GATEWAY_BURST_PER_TENANT", 20)
 	metricsAddr := config.EnvOr("METRICS_ADDR", ":9106")
+	floor := config.EnvOrInt("GATEWAY_RATE_BUCKET_FLOOR", 0)
+
+	// Spec #52, B2: required and numeric values fail fast at boot — a wrong
+	// GATEWAY_RATE_PER_TENANT must not silently apply a default. Everything
+	// wrong is reported in one shot.
+	secret, errSecret := config.EnvRequired("GATEWAY_JWT_SECRET")
+	rate, errRate := config.EnvFloat("GATEWAY_RATE_PER_TENANT")
+	burst, errBurst := config.EnvFloat("GATEWAY_BURST_PER_TENANT")
+	if err := config.Collect(errSecret, errRate, errBurst); err != nil {
+		log.Fatalf("gateway config: %v", err)
+	}
 
 	c := closer.New(closer.DrainWindow())
 
@@ -60,7 +62,7 @@ func main() {
 
 	core := &gateway.Core{
 		Verifier:           auth.NewSandbox([]byte(secret)),
-		Limiter:            ratelimit.New(rate, burst),
+		Limiter:            ratelimit.NewLimited(rate, burst, floor),
 		StockBreaker:       circuitbreaker.New(circuitbreaker.Config{}),
 		ReservationBreaker: circuitbreaker.New(circuitbreaker.Config{}),
 		OrderBreaker:       circuitbreaker.New(circuitbreaker.Config{}),
