@@ -17,8 +17,9 @@ ALTER TABLE stock_levels ADD CONSTRAINT stock_levels_reserved_nonneg
 ALTER TABLE stock_levels ADD CONSTRAINT stock_levels_allocated_nonneg
     CHECK (allocated_qty >= 0);
 
--- stock_events reasons pinned by the derivation contract in
--- internal/stockservice/reconcile.go: "adjust"/"external" (available),
--- "reserve"/"release" (available+reserved), "allocate"/"fulfill" (markers).
-ALTER TABLE stock_events ADD CONSTRAINT stock_events_reason_in_enum
-    CHECK (reason IN ('adjust', 'external', 'reserve', 'release', 'allocate', 'fulfill'));
+-- stock_events.reason is deliberately NOT pinned to an enum: the
+-- derivation contract in internal/stockservice/reconcile.go buckets known
+-- reasons (adjust/external/reserve/release/allocate/fulfill) and treats
+-- everything else as a plain available-delta, so operational reasons like
+-- "ttl_expiry" or "reserve_failure" are legitimate. Only the write-side
+-- non-negativity invariants are enforced here.
