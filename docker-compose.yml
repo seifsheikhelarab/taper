@@ -245,6 +245,10 @@ services:
       # come from the environment (.env or export); without it the gateway
       # exits at boot with a clear error instead of starting insecure.
       GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET:-}
+      GATEWAY_RATE_PER_TENANT: ${GATEWAY_RATE_PER_TENANT:-10}
+      GATEWAY_BURST_PER_TENANT: ${GATEWAY_BURST_PER_TENANT:-20}
+      GATEWAY_AUTH_USERS: ${GATEWAY_AUTH_USERS:-}
+      GATEWAY_TOKEN_TTL: ${GATEWAY_TOKEN_TTL:-15m}
       STOCK_ADDR: stock:50051
       RESERVATION_ADDR: reservation:50052
       ORDER_ADDR: order:50053

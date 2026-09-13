@@ -31,12 +31,13 @@ var (
 	tenantBUUID = "22222222-2222-2222-2222-222222222222"
 )
 
-// newGateway spins an httptest server fronting the in-process gRPC stack.
-func newGateway(t *testing.T, e *testEnv, rate float64, burst float64) *httptest.Server {
+// newGatewayCore builds the shared Core and mux over the in-process stack,
+// minus the httptest server (so tests can add routes before mounting).
+func newGatewayCore(t *testing.T, e *testEnv) (*gateway.Core, *http.ServeMux) {
 	t.Helper()
 	core := &gateway.Core{
 		Verifier:           auth.NewSandbox([]byte(gatewaySecret)),
-		Limiter:            ratelimit.New(rate, burst),
+		Limiter:            ratelimit.New(0, 0),
 		StockBreaker:       circuitbreaker.New(circuitbreaker.Config{}),
 		ReservationBreaker: circuitbreaker.New(circuitbreaker.Config{}),
 		OrderBreaker:       circuitbreaker.New(circuitbreaker.Config{}),
@@ -45,6 +46,14 @@ func newGateway(t *testing.T, e *testEnv, rate float64, burst float64) *httptest
 	gateway.NewStockRoutes(core, e.stockConn).Mount(mux)
 	gateway.NewReservationRoutes(core, e.resConn).Mount(mux)
 	gateway.NewOrderRoutes(core, e.orderConn).Mount(mux)
+	return core, mux
+}
+
+// newGateway spins an httptest server fronting the in-process gRPC stack.
+func newGateway(t *testing.T, e *testEnv, rate float64, burst float64) *httptest.Server {
+	t.Helper()
+	core, mux := newGatewayCore(t, e)
+	core.Limiter = ratelimit.New(rate, burst)
 	srv := httptest.NewServer(core.Middleware(mux))
 	t.Cleanup(srv.Close)
 	return srv
@@ -301,6 +310,47 @@ func TestGatewayRBACScopedTokenRejection(t *testing.T) {
 	status, _ = restCall(t, srv, "GET", "/v1/orders/rbac-missing", expired, "", nil)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("expired token: %d, want 401", status)
+	}
+}
+
+// TestGatewayLoginEndToEnd exercises POST /v1/auth/login through the full
+// stack: static credentials mint a gateway token that then authorizes a
+// real stock mutation; bad credentials are rejected before any gRPC call.
+func TestGatewayLoginEndToEnd(t *testing.T) {
+	e := setup(t)
+	users, err := gateway.ParseAuthUsers(fmt.Sprintf("gw-user:gw-pass:%s:read-write", tenantAUUID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	core, mux := newGatewayCore(t, e)
+	gateway.NewAuthRoutes(core, users, time.Minute).Mount(mux)
+	srv := httptest.NewServer(core.Middleware(mux))
+	t.Cleanup(srv.Close)
+
+	status, body := restCall(t, srv, "POST", "/v1/auth/login", "", `{"username":"gw-user","password":"gw-pass"}`, nil)
+	if status != http.StatusOK {
+		t.Fatalf("login: %d (%v)", status, body)
+	}
+	tok, _ := body["token"].(string)
+	if tok == "" || body["tenant_id"] != tenantAUUID {
+		t.Fatalf("login body = %v, want a token for %s", body, tenantAUUID)
+	}
+
+	// The minted token drives an authorized mutation.
+	status, body = restCall(t, srv, "POST", "/v1/stock/adjust", tok,
+		`{"sku_id":"GW-AUTH","warehouse_id":"WH-1","quantity_delta":3,"reason":"login","source":"test"}`, nil)
+	if status != http.StatusOK {
+		t.Fatalf("adjust with minted token: %d (%v)", status, body)
+	}
+	available, _, _ := e.stockLevel(t, tenantAUUID, "GW-AUTH", "WH-1")
+	if available != 3 {
+		t.Fatalf("available = %d, want 3 under the login tenant", available)
+	}
+
+	// Bad credentials 401.
+	status, body = restCall(t, srv, "POST", "/v1/auth/login", "", `{"username":"gw-user","password":"nope"}`, nil)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("bad password: %d (%v), want 401", status, body)
 	}
 }
 

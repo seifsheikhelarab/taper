@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -32,6 +33,10 @@ import (
 const maxBodyBytes = 1 << 20 // 1 MiB
 
 const callTimeout = 10 * time.Second
+
+// loginPath is the static-credential token endpoint. Shared between the
+// auth-surface route registration and the middleware exemption below.
+const loginPath = "/v1/auth/login"
 
 type claimsKey struct{}
 
@@ -159,6 +164,18 @@ func operationFor(method, path string) (string, bool) {
 	}
 }
 
+// loginHost strips the ephemeral source port from a client address so the
+// login rate limit buckets per client IP, not per connection. Behind a
+// reverse proxy this is the proxy's IP — the bucket then covers all login
+// traffic, not per-client.
+func loginHost(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
+}
+
 // admit enforces the per-tenant rate limit.
 func (c *Core) admit(w http.ResponseWriter, tenant string) bool {
 	d := c.Limiter.Take(tenant)
@@ -255,7 +272,17 @@ func (c *Core) publishBreaker(dep string, br *circuitbreaker.Breaker) {
 // still applies to all authenticated traffic.
 func (c *Core) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+		switch r.URL.Path {
+		case "/healthz", "/readyz":
+			next.ServeHTTP(w, r)
+			return
+		case loginPath:
+			// Login has no bearer token yet — it IS the token source. Skip
+			// auth and RBAC but keep the per-source rate limit (brute-force
+			// backstop); method gating stays with mux (405 for non-POST).
+			if !c.admit(w, "login:"+loginHost(r.RemoteAddr)) {
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

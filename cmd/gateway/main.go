@@ -33,6 +33,8 @@ func main() {
 	orderAddr := config.EnvOr("ORDER_ADDR", "localhost:50053")
 	metricsAddr := config.EnvOr("METRICS_ADDR", ":9106")
 	floor := config.EnvOrInt("GATEWAY_RATE_BUCKET_FLOOR", 0)
+	authUsers, errUsers := gateway.ParseAuthUsers(os.Getenv("GATEWAY_AUTH_USERS"))
+	tokenTTL := config.EnvDuration("GATEWAY_TOKEN_TTL", 15*time.Minute)
 
 	// Spec #52, B2: required and numeric values fail fast at boot — a wrong
 	// GATEWAY_RATE_PER_TENANT must not silently apply a default. Everything
@@ -40,7 +42,7 @@ func main() {
 	secret, errSecret := config.EnvRequired("GATEWAY_JWT_SECRET")
 	rate, errRate := config.EnvFloat("GATEWAY_RATE_PER_TENANT")
 	burst, errBurst := config.EnvFloat("GATEWAY_BURST_PER_TENANT")
-	if err := config.Collect(errSecret, errRate, errBurst); err != nil {
+	if err := config.Collect(errSecret, errRate, errBurst, errUsers); err != nil {
 		log.Fatalf("gateway config: %v", err)
 	}
 
@@ -91,6 +93,10 @@ func main() {
 	gateway.NewStockRoutes(core, stockConn).Mount(mux)
 	gateway.NewReservationRoutes(core, resConn).Mount(mux)
 	gateway.NewOrderRoutes(core, orderConn).Mount(mux)
+	if len(authUsers) > 0 {
+		gateway.NewAuthRoutes(core, authUsers, tokenTTL).Mount(mux)
+		log.Printf("gateway auth routes enabled (%d configured users)", len(authUsers))
+	}
 
 	srv := &http.Server{Addr: addr, Handler: core.Middleware(mux), ReadHeaderTimeout: 5 * time.Second}
 
